@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
-from IPython.display import HTML
+from IPython.display import display, HTML
 
 # Casual greeting
 print("Yo! Let's model some thermal skin layers.")
@@ -96,6 +96,6 @@ def update(frame):
     return im, q
 
 # --- 6. 创建动画并显示 ---
-anim = animation.FuncAnimation(fig, update, frames=num_frames, interval=100, blit=True)
-plt.close(fig)  # 防止重复显示静态图
-HTML(anim.to_jshtml())
+anim = animation.FuncAnimation(fig, update, frames=num_frames, interval=100, blit=False)
+display(HTML(anim.to_jshtml()))
+# 若不再需要静态图可在此关闭： plt.close(fig)
