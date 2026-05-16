@@ -14,6 +14,9 @@ def simulate_thermal_skin(
     U_wind=1.5, T_cold=0.0,
     step_per_frame=50, interval=100,
     blit=False,
+    wave_mix_factor=1.0,        # 波浪增强混合因子
+    u_stokes_surf=0.0,          # 表面 Stokes 漂移速度最大值
+    stokes_decay=1.0,           # Stokes 漂移 e 折叠深度
 ):
     # --- 1. 物理参数与网格设置 ---
     dx, dy = lx/nx, ly/ny
@@ -23,6 +26,13 @@ def simulate_thermal_skin(
     v = np.zeros((ny, nx))
     p = np.zeros((ny, nx))
     T = np.ones((ny, nx))
+
+    # --- 波浪效应预处理 ---
+    y = np.linspace(0, ly, ny)          # 垂直坐标，y=0底部，y=ly顶部
+    d = ly - y                           # 距自由表面距离
+    u_stokes = u_stokes_surf * np.exp(-d / stokes_decay)  # Stokes 速度剖面 (ny,)
+    nu_eff = nu * wave_mix_factor        # 整体增强涡粘系数
+    alpha_eff = alpha * wave_mix_factor  # 整体增强热扩散系数
 
     # --- 3. 辅助函数 ---
     def laplacian(f, dx, dy):
@@ -45,7 +55,7 @@ def simulate_thermal_skin(
     # 初始 quiver
     q = ax.quiver(X[::3], Y[::3], u[::3, ::3], v[::3, ::3],
                   color='white', scale=10, animated=True)
-    ax.set_title("Hey! Thermal Skin Layer (Step: 0)")
+    ax.set_title(f"Wave(Us={u_stokes_surf:.1f},mix={wave_mix_factor:.1f}) Step 0")
 
     # --- 5. 动画更新函数 ---
     num_frames = nt // step_per_frame
@@ -60,9 +70,9 @@ def simulate_thermal_skin(
             T[-1, :] = T_cold
             T[0, :] = 1.0
 
-            # 预测步
-            u_star = u - dt * advection(u, u, v, dx, dy) + dt * nu * laplacian(u, dx, dy)
-            v_star = v - dt * advection(v, u, v, dx, dy) + dt * nu * laplacian(v, dx, dy) + dt * beta_g * T
+            # 预测步（使用增强扩散系数 nu_eff）
+            u_star = u - dt * advection(u, u, v, dx, dy) + dt * nu_eff * laplacian(u, dx, dy)
+            v_star = v - dt * advection(v, u, v, dx, dy) + dt * nu_eff * laplacian(v, dx, dy) + dt * beta_g * T
 
             u_star[-1, :] = U_wind; u_star[0, :] = 0.0
             v_star[-1, :] = 0.0; v_star[0, :] = 0.0
@@ -83,13 +93,14 @@ def simulate_thermal_skin(
             u = u_star - dt * (np.roll(p, -1, axis=1) - np.roll(p, 1, axis=1))/(2*dx)
             v = v_star - dt * (np.roll(p, -1, axis=0) - np.roll(p, 1, axis=0))/(2*dy)
 
-            # 温度场
-            T = T - dt * advection(T, u, v, dx, dy) + dt * alpha * laplacian(T, dx, dy)
+            # 温度场 (平流项中加入 Stokes 漂移，扩散使用 alpha_eff)
+            T_adv = advection(T, u + u_stokes[None, :], v, dx, dy)
+            T = T - dt * T_adv + dt * alpha_eff * laplacian(T, dx, dy)
 
         # 更新图像和 quiver 数据
         im.set_array(T)
         q.set_UVC(u[::3, ::3], v[::3, ::3])
-        ax.set_title(f"Hey! Thermal Skin Layer (Step: {(frame+1)*step_per_frame})")
+        ax.set_title(f"Wave(Us={u_stokes_surf:.1f},mix={wave_mix_factor:.1f}) Step{(frame+1)*step_per_frame}")
         return im, q
 
     # --- 6. 创建动画 ---
@@ -115,6 +126,13 @@ if __name__ == "__main__":
     parser.add_argument('--step_per_frame', type=int, default=50, help="Simulation steps per animation frame")
     parser.add_argument('--interval', type=int, default=100, help="Animation frame interval (ms)")
     parser.add_argument('--save', type=str, help="Save animation to HTML file instead of displaying")
+    # 波浪效应参数
+    parser.add_argument('--wave_mix_factor', type=float, default=1.0,
+                        help="Enhancement factor for diffusivity due to waves")
+    parser.add_argument('--u_stokes_surf', type=float, default=0.0,
+                        help="Surface Stokes drift velocity [m/s]")
+    parser.add_argument('--stokes_decay', type=float, default=1.0,
+                        help="e-folding depth for Stokes drift [m]")
 
     args = parser.parse_args()
 
@@ -129,6 +147,9 @@ if __name__ == "__main__":
         step_per_frame=args.step_per_frame,
         interval=args.interval,
         blit=False,
+        wave_mix_factor=args.wave_mix_factor,
+        u_stokes_surf=args.u_stokes_surf,
+        stokes_decay=args.stokes_decay,
     )
 
     # 显示动画
