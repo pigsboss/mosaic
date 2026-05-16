@@ -17,7 +17,7 @@ def simulate_thermal_skin(
     wave_mix_factor=1.0,
     u_stokes_surf=0.0,
     stokes_decay=1.0,
-    surface_heat_transfer_coeff=0.05,
+    surface_heat_transfer_coeff=0.5,
     surface_ref_temp=0.0,
 ):
     # --- 1. 物理参数与网格设置 ---
@@ -69,9 +69,10 @@ def simulate_thermal_skin(
             u[-1, :] = U_wind
             u[0, :] = 0.0
             v[-1, :] = 0.0; v[0, :] = 0.0
-            # 温度边界：底部固定暖水源，顶部使用牛顿冷却（松弛边界条件）
+            # 温度边界：底部固定暖水源，顶部使用半隐式牛顿冷却（指数松弛）
             T[0, :] = 1.0
-            T[-1, :] += dt * surface_heat_transfer_coeff * (surface_ref_temp - T[-1, :])
+            alpha_c = surface_heat_transfer_coeff
+            T[-1, :] = (T[-1, :] + dt * alpha_c * surface_ref_temp) / (1.0 + dt * alpha_c)
             # 可选：限制顶部温度在合理范围内
             # T[-1, :] = np.clip(T[-1, :], 0.0, 1.0)
 
@@ -138,7 +139,7 @@ if __name__ == "__main__":
     parser.add_argument('--stokes_decay', type=float, default=1.0,
                         help="e-folding depth for Stokes drift [m]")
     # 海面热交换参数
-    parser.add_argument('--surface_heat_transfer_coeff', type=float, default=0.05,
+    parser.add_argument('--surface_heat_transfer_coeff', type=float, default=0.5,
                         help='Surface heat transfer coefficient λ (0 = insulated top)')
     parser.add_argument('--surface_ref_temp', type=float, default=0.0,
                         help='Reference atmospheric temperature for surface cooling')
