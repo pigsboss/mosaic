@@ -19,6 +19,8 @@ def simulate_thermal_skin(
     stokes_decay=1.0,
     surface_heat_transfer_coeff=0.5,
     surface_ref_temp=0.0,
+    wave_amplitude=0.0,
+    wave_number=-1,
 ):
     # --- 1. 物理参数与网格设置 ---
     dx, dy = lx/nx, ly/ny
@@ -35,6 +37,10 @@ def simulate_thermal_skin(
     u_stokes = u_stokes_surf * np.exp(-d / stokes_decay)  # Stokes 速度剖面 (ny,)
     nu_eff = nu * wave_mix_factor        # 整体增强涡粘系数
     alpha_eff = alpha * wave_mix_factor  # 整体增强热扩散系数
+
+    # 波浪几何初始化
+    if wave_number < 0:
+        wave_number = 4 * np.pi / lx    # 两个完整波形
 
     # --- 3. 辅助函数 ---
     def laplacian(f, dx, dy):
@@ -58,6 +64,12 @@ def simulate_thermal_skin(
     q = ax.quiver(X[::3], Y[::3], u[::3, ::3], v[::3, ::3],
                   color='white', scale=10, animated=True)
     ax.set_title(f"Wave(Us={u_stokes_surf:.1f},mix={wave_mix_factor:.1f}) Step 0")
+
+    # 绘制波浪表面曲线和填充
+    x_wave = np.linspace(0, lx, 200)
+    eta0 = wave_amplitude * np.sin(wave_number * x_wave)
+    surface_line, = ax.plot(x_wave, ly + eta0, 'w-', linewidth=1.5)
+    surface_fill = [ax.fill_between(x_wave, ly + eta0, ly + 0.5, color='cyan', alpha=0.4)]
 
     # --- 5. 动画更新函数 ---
     num_frames = nt // step_per_frame
@@ -106,6 +118,14 @@ def simulate_thermal_skin(
         # 更新图像和 quiver 数据
         im.set_array(T)
         q.set_UVC(u[::3, ::3], v[::3, ::3])
+
+        # 更新波浪表面
+        phase = 2 * np.pi * (frame * step_per_frame) / nt
+        eta_new = wave_amplitude * np.sin(wave_number * x_wave - phase)
+        surface_line.set_ydata(ly + eta_new)
+        surface_fill[0].remove()
+        surface_fill[0] = ax.fill_between(x_wave, ly + eta_new, ly + 0.5, color='cyan', alpha=0.4)
+
         ax.set_title(f"Wave(Us={u_stokes_surf:.1f},mix={wave_mix_factor:.1f}) Step{(frame+1)*step_per_frame}")
         return im, q
 
@@ -143,6 +163,11 @@ if __name__ == "__main__":
                         help='Surface heat transfer coefficient λ (0 = insulated top)')
     parser.add_argument('--surface_ref_temp', type=float, default=0.0,
                         help='Reference atmospheric temperature for surface cooling')
+    # 波浪可视化参数
+    parser.add_argument('--wave_amplitude', type=float, default=0.0,
+                        help='Amplitude of surface wave visualization')
+    parser.add_argument('--wave_number', type=float, default=-1.0,
+                        help='Wave number for surface visualization (negative: auto 2 waves per domain)')
 
     args = parser.parse_args()
 
@@ -161,6 +186,8 @@ if __name__ == "__main__":
         stokes_decay=args.stokes_decay,
         surface_heat_transfer_coeff=args.surface_heat_transfer_coeff,
         surface_ref_temp=args.surface_ref_temp,
+        wave_amplitude=args.wave_amplitude,
+        wave_number=args.wave_number,
     )
 
     # 显示动画
