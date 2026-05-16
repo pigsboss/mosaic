@@ -17,7 +17,7 @@ def simulate_thermal_skin(
     wave_mix_factor=1.0,
     u_stokes_surf=0.0,
     stokes_decay=1.0,
-    surface_heat_transfer_coeff=0.0,
+    surface_heat_transfer_coeff=0.05,
     surface_ref_temp=0.0,
 ):
     # --- 1. 物理参数与网格设置 ---
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     parser.add_argument('--stokes_decay', type=float, default=1.0,
                         help="e-folding depth for Stokes drift [m]")
     # 海面热交换参数
-    parser.add_argument('--surface_heat_transfer_coeff', type=float, default=0.0,
+    parser.add_argument('--surface_heat_transfer_coeff', type=float, default=0.05,
                         help='Surface heat transfer coefficient λ (0 = insulated top)')
     parser.add_argument('--surface_ref_temp', type=float, default=0.0,
                         help='Reference atmospheric temperature for surface cooling')
