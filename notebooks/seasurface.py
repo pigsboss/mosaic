@@ -388,7 +388,7 @@ def simulate_thermal_skin(
 
 
 if __name__ == "__main__":
-    print("Yo! Let's model some thermal skin layers.")
+    print("Hey! Let's model some thermal skin layers.")
 
     parser = argparse.ArgumentParser(description="2D/3D thermal skin layer simulation")
     parser.add_argument('--nx', type=int, default=60)
