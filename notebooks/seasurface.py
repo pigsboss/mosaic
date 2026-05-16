@@ -21,6 +21,7 @@ def simulate_thermal_skin(
     surface_ref_temp=0.0,
     wave_amplitude=0.0,
     wave_number=-1,
+    return_history=False,
 ):
     # --- 1. 物理参数与网格设置 ---
     dx, dy = lx/nx, ly/ny
@@ -74,6 +75,11 @@ def simulate_thermal_skin(
     # --- 5. 动画更新函数 ---
     num_frames = nt // step_per_frame
 
+    if return_history:
+        history = []
+    else:
+        history = None
+
     def update(frame):
         nonlocal u, v, p, T
         for _ in range(step_per_frame):
@@ -117,6 +123,8 @@ def simulate_thermal_skin(
 
         # 更新图像和 quiver 数据
         im.set_array(T)
+        if return_history:
+            history.append(T.copy())
         q.set_UVC(u[::3, ::3], v[::3, ::3])
 
         # 更新波浪表面
@@ -131,7 +139,10 @@ def simulate_thermal_skin(
 
     # --- 6. 创建动画 ---
     anim = animation.FuncAnimation(fig, update, frames=num_frames, interval=interval, blit=blit)
-    return anim
+    if return_history:
+        return anim, history
+    else:
+        return anim
 
 
 if __name__ == "__main__":
