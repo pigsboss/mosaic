@@ -1,9 +1,9 @@
 """
 Observation pipeline: Apply synthetic aperture systems to SST and SSH fields.
 Generates side‑by‑side comparisons (true vs observed) for:
-  - Full aperture
-  - Golay‑3
-  - Golay‑9
+  - Full aperture (4 m)
+  - Golay‑3 (10 m virtual)
+  - Golay‑9 (10 m virtual)
 Outputs: obs_sst.png, obs_ssh.png
 """
 
@@ -12,25 +12,19 @@ import matplotlib.pyplot as plt
 from scipy.signal import fftconvolve
 
 from seasurface import generate_multiscale_sst, generate_ssh_from_sst
-from apertures import full_aperture, golay3, golay9, compute_psf
+from apertures import full_aperture, golay3, golay9, compute_psf, D_FULL, D_GOLAY
 
 # ----------------------------------------------------------------------
 # Observation helpers
 # ----------------------------------------------------------------------
 
 def observe_scene(scene, psf, noise_level=0.01):
-    """
-    Convolve scene with PSF (optics) and add Gaussian noise (detector).
-    Returns observed scene (same shape as input).
-    """
+    """Convolve scene with PSF and add Gaussian noise."""
     blurred = fftconvolve(scene, psf, mode='same')
-    # Add white noise
     noise = noise_level * np.random.randn(*scene.shape)
     observed = blurred + noise
-    # Clamp to original value range
     observed = np.clip(observed, scene.min(), scene.max())
     return observed
-
 
 # ----------------------------------------------------------------------
 # Main function to generate observed fields for three apertures
@@ -39,39 +33,23 @@ def observe_scene(scene, psf, noise_level=0.01):
 def generate_observed(sst, ssh, noise_level=0.01, N=256):
     """
     Simulate observation through Full, Golay‑3, Golay‑9 apertures.
-    Returns dict:
-      { 'Full': {'sst_obs':..., 'ssh_obs':...},
-        'Golay3': ...,
-        'Golay9': ... }
+    Returns dict with observed SST and SSH.
     """
-    # Aperture parameters (matching apertures.py defaults)
-    r_full = 40
-    r_sub = 12
-    spacing3 = 30
-    scale = 25
-    golay9_pos = np.array([
-        [0, 0],
-        [scale, 0], [-scale, 0],
-        [scale/2, scale*np.sqrt(3)/2], [-scale/2, scale*np.sqrt(3)/2],
-        [scale/2, -scale*np.sqrt(3)/2], [-scale/2, -scale*np.sqrt(3)/2],
-        [0, scale*np.sqrt(3)], [0, -scale*np.sqrt(3)]
-    ]) * 0.9
-
+    # Generate physical pupils
     pupils = {
-        'Full': full_aperture(N, r_full),
-        'Golay3': golay3(N, r_sub, spacing3),
-        'Golay9': golay9(N, r_sub, golay9_pos),
+        'Full': full_aperture(N, D_FULL),
+        'Golay3': golay3(N, D_GOLAY),
+        'Golay9': golay9(N, D_GOLAY),
     }
 
     results = {}
     for name, pupil in pupils.items():
-        psf, _ = compute_psf(pupil, pad_factor=1)   # no extra pad needed
-        psf /= psf.sum()                             # ensure energy conservation
+        psf, _ = compute_psf(pupil, pad_factor=1)
+        psf /= psf.sum()
         sst_obs = observe_scene(sst, psf, noise_level)
         ssh_obs = observe_scene(ssh, psf, noise_level)
         results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs}
     return results
-
 
 # ----------------------------------------------------------------------
 # Plotting comparisons
@@ -131,17 +109,16 @@ def plot_observation_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
         plt.show()
     plt.close(fig2)
 
-
 # ----------------------------------------------------------------------
-# Demo (when run as standalone)
+# Demo
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Yo, generating multiscale SST...")
+    print("Generating multiscale SST...")
     sst = generate_multiscale_sst(nx=256, ny=256, spectral_exponent=2.5)
-    print("Yo, deriving SSH...")
+    print("Deriving SSH...")
     ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
-    print("Yo, running observation simulation...")
+    print("Running observation simulation...")
     obs = generate_observed(sst, ssh, noise_level=0.02)
-    print("Yo, plotting comparisons...")
+    print("Plotting comparisons...")
     plot_observation_comparison(sst, ssh, obs, show=True)
-    print("Yo, all done! obs_sst.png, obs_ssh.png saved.")
+    print("All done! obs_sst.png, obs_ssh.png saved.")
