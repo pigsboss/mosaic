@@ -258,6 +258,7 @@ def simulate_thermal_skin(
     surf_disp_scale=0.5,
     dims=2,
     nz=60, lz=10.0,
+    init_temp_noise=0.01,  # 新增：初始温度随机扰动幅度
 ):
     # --- 1. 物理参数与网格设置 ---
     if dims == 2:
@@ -275,6 +276,11 @@ def simulate_thermal_skin(
         w = np.zeros((ny, nx, nz))
         p = np.zeros((ny, nx, nz))
         T = np.ones((ny, nx, nz))
+
+    # 添加随机小扰动，打破对称性
+    if init_temp_noise > 0:
+        T += init_temp_noise * np.random.randn(*T.shape)
+        T = np.clip(T, 0.0, 1.0)
 
     # --- 波浪物理预处理 ---
     y = np.linspace(0, ly, ny)          # 垂直坐标，y=0底部，y=ly顶部
