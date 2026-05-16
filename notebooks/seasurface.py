@@ -11,12 +11,14 @@ def simulate_thermal_skin(
     nx=60, ny=60, lx=10.0, ly=10.0,
     nt=1000, dt=0.005,
     nu=0.1, alpha=0.05, beta_g=1.0,
-    U_wind=1.5, T_cold=0.0,
+    U_wind=1.5,
     step_per_frame=50, interval=100,
     blit=False,
-    wave_mix_factor=1.0,        # 波浪增强混合因子
-    u_stokes_surf=0.0,          # 表面 Stokes 漂移速度最大值
-    stokes_decay=1.0,           # Stokes 漂移 e 折叠深度
+    wave_mix_factor=1.0,
+    u_stokes_surf=0.0,
+    stokes_decay=1.0,
+    surface_heat_transfer_coeff=0.0,
+    surface_ref_temp=0.0,
 ):
     # --- 1. 物理参数与网格设置 ---
     dx, dy = lx/nx, ly/ny
@@ -63,12 +65,15 @@ def simulate_thermal_skin(
     def update(frame):
         nonlocal u, v, p, T
         for _ in range(step_per_frame):
-            # 强制边界条件
+            # 强制边界条件 (速度)
             u[-1, :] = U_wind
             u[0, :] = 0.0
             v[-1, :] = 0.0; v[0, :] = 0.0
-            T[-1, :] = T_cold
+            # 温度边界：底部固定暖水源，顶部使用牛顿冷却（松弛边界条件）
             T[0, :] = 1.0
+            T[-1, :] += dt * surface_heat_transfer_coeff * (surface_ref_temp - T[-1, :])
+            # 可选：限制顶部温度在合理范围内
+            # T[-1, :] = np.clip(T[-1, :], 0.0, 1.0)
 
             # 预测步（使用增强扩散系数 nu_eff）
             u_star = u - dt * advection(u, u, v, dx, dy) + dt * nu_eff * laplacian(u, dx, dy)
@@ -122,7 +127,6 @@ if __name__ == "__main__":
     parser.add_argument('--alpha', type=float, default=0.05, help="Thermal diffusivity")
     parser.add_argument('--beta_g', type=float, default=1.0, help="Buoyancy coefficient")
     parser.add_argument('--U_wind', type=float, default=1.5)
-    parser.add_argument('--T_cold', type=float, default=0.0)
     parser.add_argument('--step_per_frame', type=int, default=50, help="Simulation steps per animation frame")
     parser.add_argument('--interval', type=int, default=100, help="Animation frame interval (ms)")
     parser.add_argument('--save', type=str, help="Save animation to HTML file instead of displaying")
@@ -133,6 +137,11 @@ if __name__ == "__main__":
                         help="Surface Stokes drift velocity [m/s]")
     parser.add_argument('--stokes_decay', type=float, default=1.0,
                         help="e-folding depth for Stokes drift [m]")
+    # 海面热交换参数
+    parser.add_argument('--surface_heat_transfer_coeff', type=float, default=0.0,
+                        help='Surface heat transfer coefficient λ (0 = insulated top)')
+    parser.add_argument('--surface_ref_temp', type=float, default=0.0,
+                        help='Reference atmospheric temperature for surface cooling')
 
     args = parser.parse_args()
 
@@ -143,13 +152,14 @@ if __name__ == "__main__":
         nt=args.nt, dt=args.dt,
         nu=args.nu, alpha=args.alpha,
         beta_g=args.beta_g, U_wind=args.U_wind,
-        T_cold=args.T_cold,
         step_per_frame=args.step_per_frame,
         interval=args.interval,
         blit=False,
         wave_mix_factor=args.wave_mix_factor,
         u_stokes_surf=args.u_stokes_surf,
         stokes_decay=args.stokes_decay,
+        surface_heat_transfer_coeff=args.surface_heat_transfer_coeff,
+        surface_ref_temp=args.surface_ref_temp,
     )
 
     # 显示动画
