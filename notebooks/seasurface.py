@@ -123,7 +123,7 @@ def plot_fields(
 # Quick demo
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Hey, generating multiscale SST...")
+    print("Yo, generating multiscale SST...")
     sst = generate_multiscale_sst(nx=256, ny=256, spectral_exponent=2.5)
     print("Deriving SSH...")
     ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
