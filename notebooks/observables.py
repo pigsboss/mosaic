@@ -11,8 +11,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import fftconvolve
 
-from notebooks.seasurface import generate_multiscale_sst, generate_ssh_from_sst
-from notebooks.apertures import full_aperture, golay3, golay9, compute_psf
+from seasurface import generate_multiscale_sst, generate_ssh_from_sst
+from apertures import full_aperture, golay3, golay9, compute_psf
 
 # ----------------------------------------------------------------------
 # Observation helpers
