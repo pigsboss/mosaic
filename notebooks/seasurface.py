@@ -38,9 +38,9 @@ def simulate_thermal_skin(
 
     # 波浪增强混合剖面（指数衰减）
     mix_factor_profile = 1.0 + (mix_enhancement - 1.0) * np.exp(-d / mix_layer_depth)
-    # 转换为二维数组以用于扩散项
-    nu_eff_2d = nu * mix_factor_profile[:, None]          # (ny, 1) -> 广播至 (ny, nx)
-    alpha_eff_2d = alpha * mix_factor_profile[:, None]
+    # 转换为完整的二维数组 (ny, nx) 以供 diffusion_c 使用
+    nu_eff_2d = nu * mix_factor_profile[:, None] * np.ones((1, nx))
+    alpha_eff_2d = alpha * mix_factor_profile[:, None] * np.ones((1, nx))
 
     # --- 3. 辅助函数 ---
     def laplacian(f, dx, dy):
