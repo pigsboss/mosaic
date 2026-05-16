@@ -43,7 +43,7 @@ sub = slice(None, None, 3)   # 每 3 个点取一个箭头
 
 # 初始图像
 im = ax.imshow(T, origin='lower', cmap='RdYlBu_r', extent=[0, lx, 0, ly],
-               animated=True)
+               vmin=0, vmax=1)
 # 初始 quiver
 q = ax.quiver(X[::3], Y[::3], u[::3, ::3], v[::3, ::3],
               color='white', scale=10, animated=True)
