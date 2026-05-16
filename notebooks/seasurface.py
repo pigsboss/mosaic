@@ -14,13 +14,12 @@ def simulate_thermal_skin(
     U_wind=1.5,
     step_per_frame=50, interval=100,
     blit=False,
-    wave_mix_factor=1.0,
     u_stokes_surf=0.0,
     stokes_decay=1.0,
+    mix_enhancement=1.0,
+    mix_layer_depth=0.5,
     surface_heat_transfer_coeff=0.5,
     surface_ref_temp=0.0,
-    wave_amplitude=0.0,
-    wave_number=-1,
     return_history=False,
 ):
     # --- 1. 物理参数与网格设置 ---
@@ -32,16 +31,16 @@ def simulate_thermal_skin(
     p = np.zeros((ny, nx))
     T = np.ones((ny, nx))
 
-    # --- 波浪效应预处理 ---
+    # --- 波浪物理预处理 ---
     y = np.linspace(0, ly, ny)          # 垂直坐标，y=0底部，y=ly顶部
     d = ly - y                           # 距自由表面距离
     u_stokes = u_stokes_surf * np.exp(-d / stokes_decay)  # Stokes 速度剖面 (ny,)
-    nu_eff = nu * wave_mix_factor        # 整体增强涡粘系数
-    alpha_eff = alpha * wave_mix_factor  # 整体增强热扩散系数
 
-    # 波浪几何初始化
-    if wave_number < 0:
-        wave_number = 4 * np.pi / lx    # 两个完整波形
+    # 波浪增强混合剖面（指数衰减）
+    mix_factor_profile = 1.0 + (mix_enhancement - 1.0) * np.exp(-d / mix_layer_depth)
+    # 转换为二维数组以用于扩散项
+    nu_eff_2d = nu * mix_factor_profile[:, None]          # (ny, 1) -> 广播至 (ny, nx)
+    alpha_eff_2d = alpha * mix_factor_profile[:, None]
 
     # --- 3. 辅助函数 ---
     def laplacian(f, dx, dy):
@@ -52,6 +51,32 @@ def simulate_thermal_skin(
         df_dx = (np.roll(f, -1, axis=1) - np.roll(f, 1, axis=1)) / (2*dx)
         df_dy = (np.roll(f, -1, axis=0) - np.roll(f, 1, axis=0)) / (2*dy)
         return u * df_dx + v * df_dy
+
+    def diffusion_c(f, kappa, dx, dy):
+        """Variable-coefficient diffusion term: div(kappa grad f) using arithmetic means."""
+        # 水平方向的面系数
+        if kappa.shape[1] > 1:
+            kx_e = 0.5 * (kappa[:, :-1] + kappa[:, 1:])
+        else:
+            kx_e = np.zeros_like(kappa)
+        kx_w = kx_e
+        # 垂直方向的面系数
+        if kappa.shape[0] > 1:
+            ky_n = 0.5 * (kappa[1:, :] + kappa[:-1, :])
+        else:
+            ky_n = np.zeros_like(kappa)
+        ky_s = ky_n
+
+        diff_x = np.zeros_like(f)
+        diff_y = np.zeros_like(f)
+
+        # 内部节点
+        diff_x[:, 1:-1] = ((kx_e[:, 1:] * (f[:, 2:] - f[:, 1:-1]) / dx) -
+                           (kx_w[:, :-1] * (f[:, 1:-1] - f[:, :-2]) / dx)) / dx
+        diff_y[1:-1, :] = ((ky_n[1:, :] * (f[2:, :] - f[1:-1, :]) / dy) -
+                           (ky_s[:-1, :] * (f[1:-1, :] - f[:-2, :]) / dy)) / dy
+        # 边界点留空，将被边界条件覆盖
+        return diff_x + diff_y
 
     # --- 4. 创建图形和初始艺术家对象 ---
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -64,13 +89,7 @@ def simulate_thermal_skin(
     # 初始 quiver
     q = ax.quiver(X[::3], Y[::3], u[::3, ::3], v[::3, ::3],
                   color='white', scale=10, animated=True)
-    ax.set_title(f"Wave(Us={u_stokes_surf:.1f},mix={wave_mix_factor:.1f}) Step 0")
-
-    # 绘制波浪表面曲线和填充
-    x_wave = np.linspace(0, lx, 200)
-    eta0 = wave_amplitude * np.sin(wave_number * x_wave)
-    surface_line, = ax.plot(x_wave, ly + eta0, 'w-', linewidth=1.5)
-    surface_fill = [ax.fill_between(x_wave, ly + eta0, ly + 0.5, color='cyan', alpha=0.4)]
+    ax.set_title(f"Us={u_stokes_surf:.1f}, mix_enh={mix_enhancement:.1f}, mix_d={mix_layer_depth:.2f} Step 0")
 
     # --- 5. 动画更新函数 ---
     num_frames = nt // step_per_frame
@@ -91,12 +110,10 @@ def simulate_thermal_skin(
             T[0, :] = 1.0
             alpha_c = surface_heat_transfer_coeff
             T[-1, :] = (T[-1, :] + dt * alpha_c * surface_ref_temp) / (1.0 + dt * alpha_c)
-            # 可选：限制顶部温度在合理范围内
-            # T[-1, :] = np.clip(T[-1, :], 0.0, 1.0)
 
-            # 预测步（使用增强扩散系数 nu_eff）
-            u_star = u - dt * advection(u, u, v, dx, dy) + dt * nu_eff * laplacian(u, dx, dy)
-            v_star = v - dt * advection(v, u, v, dx, dy) + dt * nu_eff * laplacian(v, dx, dy) + dt * beta_g * T
+            # 预测步（使用变系数扩散 nu_eff_2d）
+            u_star = u - dt * advection(u, u, v, dx, dy) + dt * diffusion_c(u, nu_eff_2d, dx, dy)
+            v_star = v - dt * advection(v, u, v, dx, dy) + dt * diffusion_c(v, nu_eff_2d, dx, dy) + dt * beta_g * T
 
             u_star[-1, :] = U_wind; u_star[0, :] = 0.0
             v_star[-1, :] = 0.0; v_star[0, :] = 0.0
@@ -117,9 +134,9 @@ def simulate_thermal_skin(
             u = u_star - dt * (np.roll(p, -1, axis=1) - np.roll(p, 1, axis=1))/(2*dx)
             v = v_star - dt * (np.roll(p, -1, axis=0) - np.roll(p, 1, axis=0))/(2*dy)
 
-            # 温度场 (平流项中加入 Stokes 漂移，扩散使用 alpha_eff)
+            # 温度场 (平流项中加入 Stokes 漂移，扩散使用 alpha_eff_2d)
             T_adv = advection(T, u + u_stokes[None, :], v, dx, dy)
-            T = T - dt * T_adv + dt * alpha_eff * laplacian(T, dx, dy)
+            T = T - dt * T_adv + dt * diffusion_c(T, alpha_eff_2d, dx, dy)
 
         # 更新图像和 quiver 数据
         im.set_array(T)
@@ -127,14 +144,7 @@ def simulate_thermal_skin(
             history.append(T.copy())
         q.set_UVC(u[::3, ::3], v[::3, ::3])
 
-        # 更新波浪表面
-        phase = 2 * np.pi * (frame * step_per_frame) / nt
-        eta_new = wave_amplitude * np.sin(wave_number * x_wave - phase)
-        surface_line.set_ydata(ly + eta_new)
-        surface_fill[0].remove()
-        surface_fill[0] = ax.fill_between(x_wave, ly + eta_new, ly + 0.5, color='cyan', alpha=0.4)
-
-        ax.set_title(f"Wave(Us={u_stokes_surf:.1f},mix={wave_mix_factor:.1f}) Step{(frame+1)*step_per_frame}")
+        ax.set_title(f"Us={u_stokes_surf:.1f}, mix_enh={mix_enhancement:.1f}, mix_d={mix_layer_depth:.2f} Step{(frame+1)*step_per_frame}")
         return im, q
 
     # --- 6. 创建动画 ---
@@ -163,22 +173,19 @@ if __name__ == "__main__":
     parser.add_argument('--interval', type=int, default=100, help="Animation frame interval (ms)")
     parser.add_argument('--save', type=str, help="Save animation to HTML file instead of displaying")
     # 波浪效应参数
-    parser.add_argument('--wave_mix_factor', type=float, default=1.0,
-                        help="Enhancement factor for diffusivity due to waves")
     parser.add_argument('--u_stokes_surf', type=float, default=0.0,
                         help="Surface Stokes drift velocity [m/s]")
     parser.add_argument('--stokes_decay', type=float, default=1.0,
                         help="e-folding depth for Stokes drift [m]")
+    parser.add_argument('--mix_enhancement', type=float, default=1.0,
+                        help='Wave mixing enhancement factor at surface')
+    parser.add_argument('--mix_layer_depth', type=float, default=0.5,
+                        help='e-folding depth of wave-enhanced mixing')
     # 海面热交换参数
     parser.add_argument('--surface_heat_transfer_coeff', type=float, default=0.5,
                         help='Surface heat transfer coefficient λ (0 = insulated top)')
     parser.add_argument('--surface_ref_temp', type=float, default=0.0,
                         help='Reference atmospheric temperature for surface cooling')
-    # 波浪可视化参数
-    parser.add_argument('--wave_amplitude', type=float, default=0.0,
-                        help='Amplitude of surface wave visualization')
-    parser.add_argument('--wave_number', type=float, default=-1.0,
-                        help='Wave number for surface visualization (negative: auto 2 waves per domain)')
 
     args = parser.parse_args()
 
@@ -192,13 +199,12 @@ if __name__ == "__main__":
         step_per_frame=args.step_per_frame,
         interval=args.interval,
         blit=False,
-        wave_mix_factor=args.wave_mix_factor,
         u_stokes_surf=args.u_stokes_surf,
         stokes_decay=args.stokes_decay,
+        mix_enhancement=args.mix_enhancement,
+        mix_layer_depth=args.mix_layer_depth,
         surface_heat_transfer_coeff=args.surface_heat_transfer_coeff,
         surface_ref_temp=args.surface_ref_temp,
-        wave_amplitude=args.wave_amplitude,
-        wave_number=args.wave_number,
     )
 
     # 显示动画
