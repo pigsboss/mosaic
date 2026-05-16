@@ -123,10 +123,10 @@ def plot_fields(
 # Quick demo
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Generating multiscale SST...")
+    print("Hey, generating multiscale SST...")
     sst = generate_multiscale_sst(nx=256, ny=256, spectral_exponent=2.5)
     print("Deriving SSH...")
     ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
     print("Plotting fields...")
     plot_fields(sst, ssh, show=True)
-    print("Done. Files saved: sst_field.png, ssh_field.png")
+    print("All done! Files saved: sst_field.png, ssh_field.png")
