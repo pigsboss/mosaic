@@ -8,12 +8,12 @@ import tempfile
 from numba import njit, prange
 
 # ----------------------------------------------------------------------
-# Numba‑compatible roll functions (no axis keyword)
+# Numba‑compatible roll functions (2D and 3D versions)
 # ----------------------------------------------------------------------
 
 @njit
-def roll_0(f, shift):
-    """roll along axis=0 (rows) by -1 or +1"""
+def roll_2d_0(f, shift):
+    """roll along axis=0 for 2D arrays"""
     ny, nx = f.shape
     res = np.empty_like(f)
     if shift == -1:
@@ -27,8 +27,8 @@ def roll_0(f, shift):
     return res
 
 @njit
-def roll_1(f, shift):
-    """roll along axis=1 (columns) by -1 or +1"""
+def roll_2d_1(f, shift):
+    """roll along axis=1 for 2D arrays"""
     ny, nx = f.shape
     res = np.empty_like(f)
     if shift == -1:
@@ -42,8 +42,38 @@ def roll_1(f, shift):
     return res
 
 @njit
-def roll_2(f, shift):
-    """roll along axis=2 (for 3D arrays) by -1 or +1"""
+def roll_3d_0(f, shift):
+    """roll along axis=0 for 3D arrays"""
+    ny, nx, nz = f.shape
+    res = np.empty_like(f)
+    if shift == -1:
+        res[0, :, :] = f[-1, :, :]
+        res[1:, :, :] = f[:-1, :, :]
+    elif shift == 1:
+        res[-1, :, :] = f[0, :, :]
+        res[:-1, :, :] = f[1:, :, :]
+    else:
+        res = f
+    return res
+
+@njit
+def roll_3d_1(f, shift):
+    """roll along axis=1 for 3D arrays"""
+    ny, nx, nz = f.shape
+    res = np.empty_like(f)
+    if shift == -1:
+        res[:, 0, :] = f[:, -1, :]
+        res[:, 1:, :] = f[:, :-1, :]
+    elif shift == 1:
+        res[:, -1, :] = f[:, 0, :]
+        res[:, :-1, :] = f[:, 1:, :]
+    else:
+        res = f
+    return res
+
+@njit
+def roll_3d_2(f, shift):
+    """roll along axis=2 for 3D arrays"""
     ny, nx, nz = f.shape
     res = np.empty_like(f)
     if shift == -1:
@@ -63,8 +93,8 @@ def roll_2(f, shift):
 
 @njit
 def advection_2d(f, u, v, dx, dy):
-    df_dx = (roll_1(f, -1) - roll_1(f, 1)) / (2.0 * dx)
-    df_dy = (roll_0(f, -1) - roll_0(f, 1)) / (2.0 * dy)
+    df_dx = (roll_2d_1(f, -1) - roll_2d_1(f, 1)) / (2.0 * dx)
+    df_dy = (roll_2d_0(f, -1) - roll_2d_0(f, 1)) / (2.0 * dy)
     return u * df_dx + v * df_dy
 
 @njit
@@ -85,9 +115,9 @@ def diffusion_2d(f, kappa, dx, dy):
 
 @njit
 def advection_3d(f, u, v, w, dx, dy, dz):
-    df_dx = (roll_1(f, -1) - roll_1(f, 1)) / (2.0*dx)
-    df_dy = (roll_0(f, -1) - roll_0(f, 1)) / (2.0*dy)
-    df_dz = (roll_2(f, -1) - roll_2(f, 1)) / (2.0*dz)
+    df_dx = (roll_3d_1(f, -1) - roll_3d_1(f, 1)) / (2.0*dx)
+    df_dy = (roll_3d_0(f, -1) - roll_3d_0(f, 1)) / (2.0*dy)
+    df_dz = (roll_3d_2(f, -1) - roll_3d_2(f, 1)) / (2.0*dz)
     return u*df_dx + v*df_dy + w*df_dz
 
 @njit
@@ -130,8 +160,8 @@ def step_2d(u, v, p, T, nu_eff, alpha_eff, dx, dy, dt, beta_g, U_wind,
     v_star[-1, :] = 0.0; v_star[0, :] = 0.0
 
     # ---- 散度 ----
-    div_star = (roll_1(u_star, -1) - roll_1(u_star, 1))/(2*dx) + \
-               (roll_0(v_star, -1) - roll_0(v_star, 1))/(2*dy)
+    div_star = (roll_2d_1(u_star, -1) - roll_2d_1(u_star, 1))/(2*dx) + \
+               (roll_2d_0(v_star, -1) - roll_2d_0(v_star, 1))/(2*dy)
 
     # ---- 压力迭代 (Jacobi) ----
     for _ in range(30):
@@ -145,8 +175,8 @@ def step_2d(u, v, p, T, nu_eff, alpha_eff, dx, dy, dt, beta_g, U_wind,
         p[0, :] = p[1, :]; p[-1, :] = p[-2, :]
 
     # ---- 校正步 ----
-    u[:, :] = u_star - dt * (roll_1(p, -1) - roll_1(p, 1))/(2*dx)
-    v[:, :] = v_star - dt * (roll_0(p, -1) - roll_0(p, 1))/(2*dy)
+    u[:, :] = u_star - dt * (roll_2d_1(p, -1) - roll_2d_1(p, 1))/(2*dx)
+    v[:, :] = v_star - dt * (roll_2d_0(p, -1) - roll_2d_0(p, 1))/(2*dy)
 
     # ---- 温度场 (Stokes 漂流 + 扩散) ----
     T_adv = advection_2d(T, u + u_stokes_full, v, dx, dy)
@@ -175,9 +205,9 @@ def step_3d(u, v, w, p, T, nu_eff, alpha_eff, dx, dy, dz, dt, beta_g, U_wind,
     w_star[-1, :, :] = 0.0; w_star[0, :, :] = 0.0
 
     # 散度
-    div_star = (roll_1(u_star, -1) - roll_1(u_star, 1))/(2*dx) + \
-               (roll_0(v_star, -1) - roll_0(v_star, 1))/(2*dy) + \
-               (roll_2(w_star, -1) - roll_2(w_star, 1))/(2*dz)
+    div_star = (roll_3d_1(u_star, -1) - roll_3d_1(u_star, 1))/(2*dx) + \
+               (roll_3d_0(v_star, -1) - roll_3d_0(v_star, 1))/(2*dy) + \
+               (roll_3d_2(w_star, -1) - roll_3d_2(w_star, 1))/(2*dz)
 
     # 压力迭代（各向异性）
     coeff_x = 1.0/dx**2; coeff_y = 1.0/dy**2; coeff_z = 1.0/dz**2
@@ -197,9 +227,9 @@ def step_3d(u, v, w, p, T, nu_eff, alpha_eff, dx, dy, dz, dt, beta_g, U_wind,
         p[0,:,:] = p[1,:,:]; p[-1,:,:] = p[-2,:,:]
 
     # 校正
-    u[:,:,:] = u_star - dt*(roll_1(p,-1) - roll_1(p,1))/(2*dx)
-    v[:,:,:] = v_star - dt*(roll_0(p,-1) - roll_0(p,1))/(2*dy)
-    w[:,:,:] = w_star - dt*(roll_2(p,-1) - roll_2(p,1))/(2*dz)
+    u[:,:,:] = u_star - dt*(roll_3d_1(p,-1) - roll_3d_1(p,1))/(2*dx)
+    v[:,:,:] = v_star - dt*(roll_3d_0(p,-1) - roll_3d_0(p,1))/(2*dy)
+    w[:,:,:] = w_star - dt*(roll_3d_2(p,-1) - roll_3d_2(p,1))/(2*dz)
 
     # 温度
     T_adv = advection_3d(T, u + u_stokes_full, v, w, dx, dy, dz)
