@@ -21,6 +21,8 @@ def simulate_thermal_skin(
     surface_heat_transfer_coeff=0.5,
     surface_ref_temp=0.0,
     return_history=False,
+    show_surface_displacement=False,
+    surf_disp_scale=0.5,
 ):
     # --- 1. 物理参数与网格设置 ---
     dx, dy = lx/nx, ly/ny
@@ -91,6 +93,17 @@ def simulate_thermal_skin(
                   color='white', scale=10, animated=True)
     ax.set_title(f"Us={u_stokes_surf:.1f}, mix_enh={mix_enhancement:.1f}, mix_d={mix_layer_depth:.2f} Step 0")
 
+    # 海气界面形变（基于顶部温度）
+    if show_surface_displacement:
+        x_disp = np.linspace(0, lx, nx)
+        eta0 = np.zeros(nx)
+        surf_line, = ax.plot(x_disp, ly + eta0, 'c-', linewidth=1.5)
+        surf_fill = [ax.fill_between(x_disp, ly + eta0, ly + 2.0,
+                                     color='cyan', alpha=0.2)]
+    else:
+        surf_line = None
+        surf_fill = None
+
     # --- 5. 动画更新函数 ---
     num_frames = nt // step_per_frame
 
@@ -144,6 +157,15 @@ def simulate_thermal_skin(
             history.append(T.copy())
         q.set_UVC(u[::3, ::3], v[::3, ::3])
 
+        # 更新海气界面形变
+        if show_surface_displacement:
+            T_top = T[-1, :]                     # 顶部温度 (表层)
+            eta = surf_disp_scale * (T_top - T_top.mean())
+            surf_line.set_ydata(ly + eta)
+            surf_fill[0].remove()
+            surf_fill[0] = ax.fill_between(x_disp, ly + eta, ly + 2.0,
+                                           color='cyan', alpha=0.2)
+
         ax.set_title(f"Us={u_stokes_surf:.1f}, mix_enh={mix_enhancement:.1f}, mix_d={mix_layer_depth:.2f} Step{(frame+1)*step_per_frame}")
         return im, q
 
@@ -187,6 +209,11 @@ if __name__ == "__main__":
     parser.add_argument('--surface_ref_temp', type=float, default=0.0,
                         help='Reference atmospheric temperature for surface cooling')
 
+    parser.add_argument('--show_surface_displacement', action='store_true',
+                        help='Overlay surface deformation from temperature fluctuations')
+    parser.add_argument('--surf_disp_scale', type=float, default=0.5,
+                        help='Scaling factor for thermal expansion of the surface')
+
     args = parser.parse_args()
 
     # 运行模拟
@@ -205,6 +232,8 @@ if __name__ == "__main__":
         mix_layer_depth=args.mix_layer_depth,
         surface_heat_transfer_coeff=args.surface_heat_transfer_coeff,
         surface_ref_temp=args.surface_ref_temp,
+        show_surface_displacement=args.show_surface_displacement,
+        surf_disp_scale=args.surf_disp_scale,
     )
 
     # 显示动画
