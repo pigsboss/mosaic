@@ -27,16 +27,31 @@ def observe_scene(scene, psf, noise_level=0.01):
     return observed
 
 
+def observe_frequency(scene, pupil, noise_level=0.01):
+    """
+    Simulate observation by masking the scene's Fourier transform with the pupil
+    (which acts as the optical transfer function support), then add noise.
+    """
+    F = np.fft.fft2(scene)
+    mask = pupil / pupil.max()            # ensure 0/1
+    F_obs = F * mask
+    observed = np.real(np.fft.ifft2(F_obs))
+    noise = noise_level * np.random.randn(*scene.shape)
+    observed += noise
+    observed = np.clip(observed, scene.min(), scene.max())
+    return observed
+
+
 # ----------------------------------------------------------------------
 # Main function to generate observed fields for three apertures
 # ----------------------------------------------------------------------
 
 def generate_observed(sst, ssh, noise_level=0.01, N=256):
     """
-    Simulate observation through Full, Golay‑3, Golay‑9 apertures.
+    Simulate observation through Full, Golay‑3, Golay‑9 apertures
+    by frequency‑domain masking (interferometric sampling).
     Returns dict with observed SST and SSH.
     """
-    # Generate physical pupils
     pupils = {
         'Full': full_aperture(N, D_FULL),
         'Golay3': golay3(N, D_GOLAY),
@@ -45,10 +60,8 @@ def generate_observed(sst, ssh, noise_level=0.01, N=256):
 
     results = {}
     for name, pupil in pupils.items():
-        psf, _ = compute_psf(pupil, pad_factor=1)
-        psf /= psf.sum()
-        sst_obs = observe_scene(sst, psf, noise_level)
-        ssh_obs = observe_scene(ssh, psf, noise_level)
+        sst_obs = observe_frequency(sst, pupil, noise_level)
+        ssh_obs = observe_frequency(ssh, pupil, noise_level)
         results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs}
     return results
 

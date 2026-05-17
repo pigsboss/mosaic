@@ -162,9 +162,12 @@ def plot_apertures(show=True, savepath="apertures_comparison.png"):
     for row, (name, pupil) in enumerate(pupils.items()):
         # ---- Pupil ----
         axp = fig.add_subplot(gs[row, 0])
-        axp.imshow(pupil, cmap='gray', origin='lower')
+        diam = D_FULL if name == "Full" else D_GOLAY
+        extent_pupil = [-diam/2, diam/2, -diam/2, diam/2]
+        axp.imshow(pupil, cmap='gray', origin='lower', extent=extent_pupil)
         axp.set_title(f'{name} pupil\n(cutoff {fcuts[name]/1e6:.2f} Mcyc/rad)')
-        axp.axis('off')
+        axp.set_xlabel('x (m)')
+        axp.set_ylabel('y (m)')
 
         # ---- PSF ----
         psf, freq = compute_psf(pupil, pad_factor=2, f_cut=fcut_max)
