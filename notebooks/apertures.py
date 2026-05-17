@@ -9,8 +9,8 @@ Engineering constraints:
   - Golay‑3 and Golay‑9 share a virtual aperture of 10 m -> cutoff ~1 Mcyc/rad
   - Sub‑aperture size: 0.5 m
 
-Generates a comparison plot saved as 'apertures_comparison.png'
-and can be used interactively in Jupyter.
+PSF is shown in ground‑projected coordinates (metres) assuming
+a geostationary orbit height of 35,786 km.
 """
 
 import numpy as np
@@ -24,6 +24,7 @@ WAVELENGTH = 10.0e-6          # 10 µm (thermal infrared)
 D_FULL     = 4.0              # diameter of monolithic telescope (m)
 D_GOLAY    = 10.0             # virtual aperture diameter for Golay arrays (m)
 SUBSIZE    = 0.5              # sub‑aperture diameter (m)
+GEO_HEIGHT = 35_786_000       # geostationary orbit altitude (m)
 
 # Standard Golay‑9 relative positions (unit circle)
 _GOLAY9_REL = np.array([
@@ -103,13 +104,21 @@ def golay9(N, diameter):
     return pupil
 
 # ======================================================================
-# PSF and MTF computation (physical frequency axis)
+# PSF and MTF computation (physical units)
 # ======================================================================
 
-def compute_psf(pupil, pad_factor=1, f_cut=None):
-    """PSF (intensity) from pupil. If `f_cut` (cycles/rad) is given,
-    the frequency axis is directly labelled in those units."""
+def compute_psf(pupil, diameter, pad_factor=1):
+    """
+    PSF (intensity) from pupil, returned on a ground‑projected coordinate grid.
+    - pupil   : 2D array (N×N)
+    - diameter: physical diameter of the aperture (m)
+    - pad_factor: zero‑padding factor (default 1 = no padding)
+    Returns:
+      psf   : 2D normalised intensity array
+      theta : 1D array of angular coordinates (rad) for each pixel
+    """
     N = pupil.shape[0]
+    dx = diameter / N                   # pupil sampling interval (m)
     N_pad = N * pad_factor
     off = (N_pad - N) // 2
     padded = np.zeros((N_pad, N_pad))
@@ -117,70 +126,66 @@ def compute_psf(pupil, pad_factor=1, f_cut=None):
 
     field = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(padded)))
     psf = np.abs(field)**2
-    psf /= psf.sum()                     # normalise to unit energy
+    psf /= psf.sum()                    # normalise to unit energy
 
-    if f_cut is not None:
-        freq = np.linspace(-f_cut, f_cut, N_pad, endpoint=False)
-    else:
-        freq = np.fft.fftshift(np.fft.fftfreq(N_pad, d=1.0))
-    return psf, freq
+    # angular coordinate (rad) from spatial frequency
+    freq_spatial = np.fft.fftshift(np.fft.fftfreq(N_pad, d=dx))   # cycles/m
+    theta = freq_spatial * WAVELENGTH                               # rad
+    return psf, theta
 
-def compute_mtf(psf):
-    """MTF from a PSF (absolute value of OTF)."""
+def compute_mtf(psf, dtheta):
+    """
+    MTF from a PSF sampled with angular step dtheta (rad).
+    Returns mtf and the corresponding frequency axis (cycles/rad).
+    """
     otf = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(psf)))
     mtf = np.abs(otf)
     mtf /= mtf.max()
-    return mtf
+    N = len(psf)
+    freq = np.fft.fftshift(np.fft.fftfreq(N, d=dtheta))   # cycles/rad
+    return mtf, freq
 
 # ======================================================================
 # Main comparison plot
 # ======================================================================
 
 def plot_apertures(show=True, savepath="apertures_comparison.png"):
-    """3×3 figure: rows = Full, Golay‑3, Golay‑9; cols = pupil, PSF(log), MTF.
-    Frequency axes are in cycles/rad (Mcyc/rad)."""
+    """3×3 figure: rows = Full, Golay‑3, Golay‑9; cols = pupil, PSF(ground,m), MTF."""
     N = 256
-    # Cutoff frequencies
-    fcut_full  = D_FULL  / WAVELENGTH   # 4e6 cyc/rad = 0.4 Mcyc/rad
-    fcut_golay = D_GOLAY / WAVELENGTH   # 1e6 cyc/rad = 1.0 Mcyc/rad
-    fcut_max   = fcut_golay             # common axis limit (use the larger one)
 
     pupils = {
-        "Full":    full_aperture(N, D_FULL),
-        "Golay‑3": golay3(N, D_GOLAY),
-        "Golay‑9": golay9(N, D_GOLAY),
-    }
-    fcuts = {
-        "Full":    fcut_full,
-        "Golay‑3": fcut_golay,
-        "Golay‑9": fcut_golay,
+        "Full":    (full_aperture(N, D_FULL),  D_FULL),
+        "Golay‑3": (golay3(N, D_GOLAY),        D_GOLAY),
+        "Golay‑9": (golay9(N, D_GOLAY),        D_GOLAY),
     }
 
     fig = plt.figure(figsize=(12, 10))
     gs = GridSpec(3, 3, figure=fig, wspace=0.35, hspace=0.45)
 
-    for row, (name, pupil) in enumerate(pupils.items()):
-        # ---- Pupil ----
+    for row, (name, (pupil, diam)) in enumerate(pupils.items()):
+        # ---- Pupil (physical axes in metres) ----
         axp = fig.add_subplot(gs[row, 0])
-        diam = D_FULL if name == "Full" else D_GOLAY
         extent_pupil = [-diam/2, diam/2, -diam/2, diam/2]
         axp.imshow(pupil, cmap='gray', origin='lower', extent=extent_pupil)
-        axp.set_title(f'{name} pupil\n(cutoff {fcuts[name]/1e6:.2f} Mcyc/rad)')
+        axp.set_title(f'{name} pupil\n(diameter {diam} m)')
         axp.set_xlabel('x (m)')
         axp.set_ylabel('y (m)')
 
-        # ---- PSF ----
-        psf, freq = compute_psf(pupil, pad_factor=2, f_cut=fcut_max)
+        # ---- PSF (ground‑projected, metres) ----
+        psf, theta = compute_psf(pupil, diam, pad_factor=2)
+        # convert angle to ground distance
+        ground = theta * GEO_HEIGHT        # metres
         axp = fig.add_subplot(gs[row, 1])
         psf_log = np.log10(np.maximum(psf, 1e-12))
         im = axp.imshow(psf_log, cmap='inferno', origin='lower',
-                        extent=[freq[0]/1e6, freq[-1]/1e6, freq[0]/1e6, freq[-1]/1e6])
+                        extent=[ground[0], ground[-1], ground[0], ground[-1]])
         axp.set_title(f'{name} PSF (log)')
-        axp.set_xlabel('f_x (Mcyc/rad)'); axp.set_ylabel('f_y (Mcyc/rad)')
+        axp.set_xlabel('Ground x (m)'); axp.set_ylabel('Ground y (m)')
         plt.colorbar(im, ax=axp, fraction=0.046, pad=0.04)
 
-        # ---- MTF ----
-        mtf = compute_mtf(psf)
+        # ---- MTF (cycles/rad) ----
+        dtheta = theta[1] - theta[0]
+        mtf, freq = compute_mtf(psf, dtheta)
         axp = fig.add_subplot(gs[row, 2])
         axp.imshow(mtf, cmap='gray', origin='lower',
                    extent=[freq[0]/1e6, freq[-1]/1e6, freq[0]/1e6, freq[-1]/1e6],
@@ -213,27 +218,38 @@ def plot_single_aperture(type, N=256, diameter=None, **kwargs):
     else:
         raise ValueError("Unknown type: 'full', 'golay3', 'golay9'")
 
-    f_cut = diameter / WAVELENGTH
-    psf, freq = compute_psf(pupil, pad_factor=2, f_cut=f_cut)
-    mtf = compute_mtf(psf)
+    # PSF
+    psf, theta = compute_psf(pupil, diameter, pad_factor=2)
+    ground = theta * GEO_HEIGHT
+
+    # MTF
+    dtheta = theta[1] - theta[0]
+    mtf, freq = compute_mtf(psf, dtheta)
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
-    axes[0].imshow(pupil, cmap='gray', origin='lower')
-    axes[0].set_title('Pupil function')
-    axes[0].axis('off')
 
+    # pupil
+    diam = diameter
+    extent_pupil = [-diam/2, diam/2, -diam/2, diam/2]
+    axes[0].imshow(pupil, cmap='gray', origin='lower', extent=extent_pupil)
+    axes[0].set_title('Pupil function')
+    axes[0].set_xlabel('x (m)'); axes[0].set_ylabel('y (m)')
+
+    # PSF
     psf_log = np.log10(np.maximum(psf, 1e-12))
     im1 = axes[1].imshow(psf_log, cmap='inferno', origin='lower',
-                         extent=[freq[0]/1e6, freq[-1]/1e6, freq[0]/1e6, freq[-1]/1e6])
+                         extent=[ground[0], ground[-1], ground[0], ground[-1]])
     axes[1].set_title('PSF (log)')
-    axes[1].set_xlabel('fx (Mcyc/rad)'); axes[1].set_ylabel('fy (Mcyc/rad)')
+    axes[1].set_xlabel('Ground x (m)'); axes[1].set_ylabel('Ground y (m)')
     plt.colorbar(im1, ax=axes[1])
 
+    # MTF
     axes[2].imshow(mtf, cmap='gray', origin='lower',
                    extent=[freq[0]/1e6, freq[-1]/1e6, freq[0]/1e6, freq[-1]/1e6],
                    vmin=0, vmax=1)
     axes[2].set_title('MTF')
     axes[2].set_xlabel('fx (Mcyc/rad)'); axes[2].set_ylabel('fy (Mcyc/rad)')
+
     fig.tight_layout()
     return fig
 
