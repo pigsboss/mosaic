@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 from scipy.signal import fftconvolve
 
 from seasurface import generate_multiscale_sst, generate_ssh_from_sst
-from apertures import full_aperture, golay3, golay9, compute_psf, D_FULL, D_GOLAY
+from apertures import full_aperture, golay3, golay9, compute_psf
+import apertures as ap_const
 
 # ----------------------------------------------------------------------
 # Observation helpers
@@ -26,6 +27,7 @@ def observe_scene(scene, psf, noise_level=0.01):
     observed = np.clip(observed, scene.min(), scene.max())
     return observed
 
+
 # ----------------------------------------------------------------------
 # Main function to generate observed fields for three apertures
 # ----------------------------------------------------------------------
@@ -37,9 +39,9 @@ def generate_observed(sst, ssh, noise_level=0.01, N=256):
     """
     # Generate physical pupils
     pupils = {
-        'Full': full_aperture(N, D_FULL),
-        'Golay3': golay3(N, D_GOLAY),
-        'Golay9': golay9(N, D_GOLAY),
+        'Full': full_aperture(N, ap_const.D_FULL),
+        'Golay3': golay3(N, ap_const.D_GOLAY),
+        'Golay9': golay9(N, ap_const.D_GOLAY),
     }
 
     results = {}
@@ -50,6 +52,7 @@ def generate_observed(sst, ssh, noise_level=0.01, N=256):
         ssh_obs = observe_scene(ssh, psf, noise_level)
         results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs}
     return results
+
 
 # ----------------------------------------------------------------------
 # Plotting comparisons
@@ -108,6 +111,7 @@ def plot_observation_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
     if show:
         plt.show()
     plt.close(fig2)
+
 
 # ----------------------------------------------------------------------
 # Demo
