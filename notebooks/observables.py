@@ -9,23 +9,14 @@ Outputs: obs_sst.png, obs_ssh.png
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import fftconvolve
+from scipy.interpolate import RegularGridInterpolator
 
 from seasurface import generate_multiscale_sst, generate_ssh_from_sst
-from apertures import full_aperture, golay3, golay9, compute_psf, D_FULL, D_GOLAY
+from apertures import full_aperture, golay3, golay9, D_FULL, D_GOLAY, WAVELENGTH
 
 # ----------------------------------------------------------------------
 # Observation helpers
 # ----------------------------------------------------------------------
-
-def observe_scene(scene, psf, noise_level=0.01):
-    """Convolve scene with PSF and add Gaussian noise."""
-    blurred = fftconvolve(scene, psf, mode='same')
-    noise = noise_level * np.random.randn(*scene.shape)
-    observed = blurred + noise
-    observed = np.clip(observed, scene.min(), scene.max())
-    return observed
-
 
 def observe_frequency(scene, pupil, noise_level=0.01):
     """
