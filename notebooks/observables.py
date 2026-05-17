@@ -12,8 +12,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import fftconvolve
 
 from seasurface import generate_multiscale_sst, generate_ssh_from_sst
-from apertures import full_aperture, golay3, golay9, compute_psf
-import apertures as ap_const
+from apertures import full_aperture, golay3, golay9, compute_psf, D_FULL, D_GOLAY
 
 # ----------------------------------------------------------------------
 # Observation helpers
@@ -39,9 +38,9 @@ def generate_observed(sst, ssh, noise_level=0.01, N=256):
     """
     # Generate physical pupils
     pupils = {
-        'Full': full_aperture(N, ap_const.D_FULL),
-        'Golay3': golay3(N, ap_const.D_GOLAY),
-        'Golay9': golay9(N, ap_const.D_GOLAY),
+        'Full': full_aperture(N, D_FULL),
+        'Golay3': golay3(N, D_GOLAY),
+        'Golay9': golay9(N, D_GOLAY),
     }
 
     results = {}
