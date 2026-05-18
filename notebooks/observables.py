@@ -19,7 +19,7 @@ from scipy.interpolate import RegularGridInterpolator
 
 from apertures import (full_aperture, golay3, golay9,
                        compute_psf, compute_mtf,
-                       D_FULL, D_GOLAY, GEO_HEIGHT)
+                       D_FULL, D_GOLAY, GEO_HEIGHT, WAVELENGTH)
 from seasurface import moment_anisotropy
 
 # ----------------------------------------------------------------------
@@ -81,8 +81,8 @@ def observe_interferometric(scene, pupil, diameter, lx, ly,
     fy = np.fft.fftfreq(ny, d=dy)
     FX, FY = np.meshgrid(fx, fy)
 
-    AX = FX * GEO_HEIGHT
-    AY = FY * GEO_HEIGHT
+    AX = FX * WAVELENGTH * GEO_HEIGHT
+    AY = FY * WAVELENGTH * GEO_HEIGHT
 
     interp = RegularGridInterpolator((freq_ang, freq_ang), mtf,
                                      bounds_error=False, fill_value=0.0)
