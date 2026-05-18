@@ -157,7 +157,7 @@ state_params = {
 }
 
 
-def generate_state_sst_ssh(state="calm", nx=1024, ny=1024, lx=1.0, ly=1.0, seed=42):
+def generate_state_sst_ssh(state="calm", nx=512, ny=512, lx=1.0, ly=1.0, seed=42):
     """
     Generate SST and SSH fields for a given sea state.
 
@@ -208,7 +208,7 @@ def generate_state_sst_ssh(state="calm", nx=1024, ny=1024, lx=1.0, ly=1.0, seed=
 # =============================================================================
 
 def generate_multiscale_sst(
-    nx=1024, ny=1024,
+    nx=512, ny=512,
     lx=1.0, ly=1.0,
     spectral_exponent=2.5,
     seed=42,
