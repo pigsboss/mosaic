@@ -273,6 +273,36 @@ def radial_power_spectrum(field, dx, dy):
     return k_center[valid], radial_psd[valid]
 
 
+# =============================================================================
+# NEW: orthogonal (longitudinal / transverse) power spectra
+# =============================================================================
+
+def orthogonal_power_spectra(field, dx, dy):
+    """
+    Compute 1D power spectra by integrating the 2D PSD along the orthogonal axis.
+    Returns:
+        kx, power_x : along x (longitudinal)
+        ky, power_y : along y (transverse)
+    Both power arrays are not normalised.
+    """
+    ny, nx = field.shape
+    F = fft2(field)
+    psd2d = np.abs(F) ** 2
+
+    kx = fftfreq(nx, d=dx)      # cycles/km
+    ky = fftfreq(ny, d=dy)
+
+    # integrate along y → power as function of kx
+    power_x = np.sum(psd2d, axis=0)
+    # integrate along x → power as function of ky
+    power_y = np.sum(psd2d, axis=1)
+    return kx, power_x, ky, power_y
+
+
+# =============================================================================
+# (original angular anisotropy kept unchanged)
+# =============================================================================
+
 def angular_anisotropy(field, dx, dy, n_bins=50):
     """
     Calculate angular concentration index per radial wavenumber.
@@ -335,7 +365,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     Generate three figures:
       - Figure 1: SST fields (1×3)
       - Figure 2: SSH fields (1×3)
-      - Figure 3: 2×2 grid of radial power spectra and angular anisotropy
+      - Figure 3: 2×2 grid of radial power spectra and orthogonal spectra
     Also saves all fields as .npy.
     """
     # ----------------------------------------------------------
@@ -392,7 +422,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     plt.close(fig2)
 
     # ----------------------------------------------------------
-    # Figure 3: 2x2 power spectra & anisotropy
+    # Figure 3: 2x2 power spectra & anisotropy (now orthogonal spectra)
     # ----------------------------------------------------------
     fig3, ((ax_rad_sst, ax_rad_ssh), (ax_aniso_sst, ax_aniso_ssh)) = plt.subplots(
         2, 2, figsize=(14, 10))
@@ -422,31 +452,47 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     ax_rad_ssh.legend()
     ax_rad_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- Bottom left: SST angular anisotropy ----
+    # ---- Bottom left: SST orthogonal spectra (longitudinal & transverse) ----
     for state in states:
         sst, _ = data[state]
-        k_a_sst, aniso_sst = angular_anisotropy(sst, dx, dy)
-        ax_aniso_sst.semilogx(k_a_sst, aniso_sst,
-                              color=colors[state], label=state)
+        kx, px, ky, py = orthogonal_power_spectra(sst, dx, dy)
+        # positive semi‑axes only
+        mask_x = kx >= 0
+        mask_y = ky >= 0
+        kx_pos = kx[mask_x]; px_pos = px[mask_x]
+        ky_pos = ky[mask_y]; py_pos = py[mask_y]
+        # normalise each spectrum to its maximum
+        if px_pos.max() > 0: px_pos = px_pos / px_pos.max()
+        if py_pos.max() > 0: py_pos = py_pos / py_pos.max()
+        # longitudinal (x) – solid line
+        ax_aniso_sst.loglog(kx_pos, px_pos, color=colors[state], label=f'{state} long.')
+        # transverse (y) – dashed line
+        ax_aniso_sst.loglog(ky_pos, py_pos, '--', color=colors[state], label=f'{state} trans.')
     ax_aniso_sst.set_xlabel('Wavenumber (cycles/km)')
-    ax_aniso_sst.set_ylabel('Directional Concentration R')
-    ax_aniso_sst.set_title('SST Angular Anisotropy')
-    ax_aniso_sst.legend()
+    ax_aniso_sst.set_ylabel('Normalized Power')
+    ax_aniso_sst.set_title('SST Orthogonal Spectra')
+    ax_aniso_sst.legend(fontsize='small')
     ax_aniso_sst.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- Bottom right: SSH angular anisotropy ----
+    # ---- Bottom right: SSH orthogonal spectra ----
     for state in states:
         _, ssh = data[state]
-        k_a_ssh, aniso_ssh = angular_anisotropy(ssh, dx, dy)
-        ax_aniso_ssh.semilogx(k_a_ssh, aniso_ssh,
-                              color=colors[state], label=state)
+        kx, px, ky, py = orthogonal_power_spectra(ssh, dx, dy)
+        mask_x = kx >= 0
+        mask_y = ky >= 0
+        kx_pos = kx[mask_x]; px_pos = px[mask_x]
+        ky_pos = ky[mask_y]; py_pos = py[mask_y]
+        if px_pos.max() > 0: px_pos = px_pos / px_pos.max()
+        if py_pos.max() > 0: py_pos = py_pos / py_pos.max()
+        ax_aniso_ssh.loglog(kx_pos, px_pos, color=colors[state], label=f'{state} long.')
+        ax_aniso_ssh.loglog(ky_pos, py_pos, '--', color=colors[state], label=f'{state} trans.')
     ax_aniso_ssh.set_xlabel('Wavenumber (cycles/km)')
-    ax_aniso_ssh.set_ylabel('Directional Concentration R')
-    ax_aniso_ssh.set_title('SSH Angular Anisotropy')
-    ax_aniso_ssh.legend()
+    ax_aniso_ssh.set_ylabel('Normalized Power')
+    ax_aniso_ssh.set_title('SSH Orthogonal Spectra')
+    ax_aniso_ssh.legend(fontsize='small')
     ax_aniso_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    fig3.suptitle('Spectral Characteristics (Radial & Anisotropy)', fontweight='bold')
+    fig3.suptitle('Spectral Characteristics (Radial & Orthogonal)', fontweight='bold')
     fig3.tight_layout()
     fig3.savefig("state_spectra_curves.png", dpi=200, bbox_inches='tight')
     if show:
