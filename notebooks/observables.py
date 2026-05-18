@@ -15,11 +15,11 @@ Generates three comprehensive comparison figures:
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import RegularGridInterpolator
+from scipy.signal import fftconvolve
 
 from apertures import (full_aperture, golay3, golay9,
-                       compute_psf, compute_mtf,
-                       D_FULL, D_GOLAY, GEO_HEIGHT, WAVELENGTH)
+                       compute_psf,
+                       D_FULL, D_GOLAY)
 from seasurface import moment_anisotropy
 
 # ----------------------------------------------------------------------
@@ -59,62 +59,26 @@ def radial_power_spectrum(field, dx, dy):
 
 
 # ----------------------------------------------------------------------
-# Interferometric observation simulation (physical)
+# PSF‑based observation simulation (spatial convolution)
 # ----------------------------------------------------------------------
 
-def observe_interferometric(scene, pupil, diameter, lx, ly,
-                            noise_level=0.01, threshold=0.1, normalize=True):
+def observe_by_psf(scene, psf, noise_level=0.01):
     """
-    Simulate observation through a synthetic aperture using its actual MTF,
-    mapped to angular frequencies via GEO height.
+    Simulate observation by convolving the scene with the aperture PSF.
+    The PSF is assumed to be already normalised (sum = 1).
     """
-    # --- MTF from pupil ---
-    psf, theta = compute_psf(pupil, diameter, pad_factor=1)
-    dtheta = theta[1] - theta[0]
-    mtf, freq_ang = compute_mtf(psf, dtheta)
-
-    # --- Scene spatial frequency grid ---
-    ny, nx = scene.shape
-    dx = lx / nx
-    dy = ly / ny
-    fx = np.fft.fftfreq(nx, d=dx)
-    fy = np.fft.fftfreq(ny, d=dy)
-    FX, FY = np.meshgrid(fx, fy)
-
-    # Convert scene spatial frequency (cycles/m) to angular frequency (cycles/rad)
-    AX = FX * GEO_HEIGHT
-    AY = FY * GEO_HEIGHT
-
-    interp = RegularGridInterpolator((freq_ang, freq_ang), mtf,
-                                     bounds_error=False, fill_value=0.0)
-    sample = interp(np.stack((AY, AX), axis=-1))
-
-    sample[sample < threshold] = 0.0
-
-    F = np.fft.fft2(scene)
-    if normalize:
-        eps = 1e-12
-        F_obs = F * np.where(sample > 0, 1.0 / (sample + eps), 0.0)
-    else:
-        F_obs = F * sample
-
-    observed = np.real(np.fft.ifft2(F_obs))
-
-    noise = noise_level * np.random.randn(ny, nx)
+    observed = fftconvolve(scene, psf, mode='same')
+    noise = noise_level * np.random.randn(*scene.shape)
     observed += noise
     observed = np.clip(observed, scene.min(), scene.max())
     return observed
 
 
-def generate_observed(sst, ssh, noise_level=0.01, N=256,
-                      lx_km=1.0, ly_km=1.0,
-                      threshold=0.1, normalize=True):
-    """Simulate observation through the three apertures.
-    lx_km, ly_km : scene extent in km, converted to metres.
+def generate_observed(sst, ssh, noise_level=0.01, N=256):
     """
-    lx = lx_km * 1e3
-    ly = ly_km * 1e3
-
+    Simulate observation through the three apertures by PSF convolution.
+    Returns dict with observed SST and SSH.
+    """
     apertures = {
         'Full':   (full_aperture(N, D_FULL),   D_FULL),
         'Golay3': (golay3(N, D_GOLAY),         D_GOLAY),
@@ -123,10 +87,9 @@ def generate_observed(sst, ssh, noise_level=0.01, N=256,
 
     results = {}
     for name, (pupil, diam) in apertures.items():
-        sst_obs = observe_interferometric(sst, pupil, diam, lx, ly,
-                                         noise_level, threshold, normalize)
-        ssh_obs = observe_interferometric(ssh, pupil, diam, lx, ly,
-                                         noise_level, threshold, normalize)
+        psf, _ = compute_psf(pupil, diam, pad_factor=2)  # PSF already normalised
+        sst_obs = observe_by_psf(sst, psf, noise_level)
+        ssh_obs = observe_by_psf(ssh, psf, noise_level)
         results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs}
     return results
 
@@ -375,11 +338,6 @@ if __name__ == "__main__":
                         help='Scene height in km (default: 1.0)')
     parser.add_argument('--noise', type=float, default=0.02,
                         help='Observation noise level (default: 0.02)')
-    parser.add_argument('--threshold', type=float, default=0.1,
-                        help='MTF threshold for observation (default: 0.1)')
-    parser.add_argument('--normalize', action='store_true', default=True,
-                        help='Normalize MTF in observation (default: True)')
-    parser.add_argument('--no-normalize', dest='normalize', action='store_false')
     args = parser.parse_args()
 
     lx_km = args.lx_km
@@ -403,10 +361,7 @@ if __name__ == "__main__":
     for state, (sst, ssh) in true_data.items():
         print(f"Simulating observations for {state}...")
         obs = generate_observed(sst, ssh,
-                                noise_level=args.noise,
-                                lx_km=lx_km, ly_km=ly_km,
-                                threshold=args.threshold,
-                                normalize=args.normalize)
+                                noise_level=args.noise)
         obs_data[state] = obs
 
     print("Generating comprehensive figures...")
