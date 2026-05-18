@@ -274,6 +274,85 @@ def radial_power_spectrum(field, dx, dy):
 
 
 # =============================================================================
+# NEW: moment‑based anisotropy (structure tensor)
+# =============================================================================
+
+def moment_anisotropy(field, dx, dy, n_bins=50):
+    """
+    Compute spectral moment tensor for each radial bin and derive
+    anisotropy degree A = (λ1 - λ2) / (λ1 + λ2) and principal orientation θ.
+
+    Parameters
+    ----------
+    field : 2D ndarray
+    dx, dy : float
+        Grid spacing in the same units used for kx, ky (cycles/km when dx in km).
+    n_bins : int
+
+    Returns
+    -------
+    k_centers : 1D array (n_bins,)
+    A : 1D array (n_bins,)         anisotropy degree, 0 = isotropic, 1 = fully aligned
+    theta : 1D array (n_bins,)     principal orientation [rad], 0 = along x
+    """
+    ny, nx = field.shape
+    F = np.fft.fft2(field)
+    psd2d = np.abs(F) ** 2
+
+    kx = np.fft.fftfreq(nx, d=dx)
+    ky = np.fft.fftfreq(ny, d=dy)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX ** 2 + KY ** 2)
+
+    k_max = np.max(k_rad)
+    bins = np.linspace(0, k_max, n_bins + 1)
+    k_centers = 0.5 * (bins[1:] + bins[:-1])
+
+    A = np.zeros(n_bins)
+    theta = np.zeros(n_bins)
+
+    for i in range(n_bins):
+        mask = (k_rad >= bins[i]) & (k_rad < bins[i+1])
+        if not np.any(mask):
+            A[i] = 0.0
+            theta[i] = 0.0
+            continue
+        p_vals = psd2d[mask]
+        kx_vals = KX[mask]
+        ky_vals = KY[mask]
+        total = np.sum(p_vals)
+        if total == 0:
+            A[i] = 0.0
+            theta[i] = 0.0
+            continue
+        # spectral moments (structure tensor)
+        m20 = np.sum(p_vals * kx_vals ** 2) / total
+        m11 = np.sum(p_vals * kx_vals * ky_vals) / total
+        m02 = np.sum(p_vals * ky_vals ** 2) / total
+
+        # eigenvalues of [[m20, m11], [m11, m02]]
+        trace = m20 + m02
+        det = m20 * m02 - m11 * m11
+        disc = np.sqrt(trace ** 2 - 4 * det)
+        lambda1 = 0.5 * (trace + disc)
+        lambda2 = 0.5 * (trace - disc)
+
+        # avoid division by zero
+        if lambda1 + lambda2 > 0:
+            A[i] = (lambda1 - lambda2) / (lambda1 + lambda2)
+        else:
+            A[i] = 0.0
+
+        # principal direction
+        if (m20 - m02) == 0 and m11 == 0:
+            theta[i] = 0.0
+        else:
+            theta[i] = 0.5 * np.arctan2(2 * m11, m20 - m02)
+
+    return k_centers, A, theta
+
+
+# =============================================================================
 # NEW: orthogonal (longitudinal / transverse) power spectra
 # =============================================================================
 
@@ -422,7 +501,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     plt.close(fig2)
 
     # ----------------------------------------------------------
-    # Figure 3: 2x2 power spectra & anisotropy (now orthogonal spectra)
+    # Figure 3: 2x2 power spectra & anisotropy (now moment-based A(k))
     # ----------------------------------------------------------
     fig3, ((ax_rad_sst, ax_rad_ssh), (ax_aniso_sst, ax_aniso_ssh)) = plt.subplots(
         2, 2, figsize=(14, 10))
@@ -452,47 +531,29 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     ax_rad_ssh.legend()
     ax_rad_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- Bottom left: SST orthogonal spectra (longitudinal & transverse) ----
+    # ---- Bottom left: SST spectral moment anisotropy A(k) ----
     for state in states:
         sst, _ = data[state]
-        kx, px, ky, py = orthogonal_power_spectra(sst, dx, dy)
-        # positive semi‑axes only
-        mask_x = kx >= 0
-        mask_y = ky >= 0
-        kx_pos = kx[mask_x]; px_pos = px[mask_x]
-        ky_pos = ky[mask_y]; py_pos = py[mask_y]
-        # normalise each spectrum to its maximum
-        if px_pos.max() > 0: px_pos = px_pos / px_pos.max()
-        if py_pos.max() > 0: py_pos = py_pos / py_pos.max()
-        # longitudinal (x) – solid line
-        ax_aniso_sst.loglog(kx_pos, px_pos, color=colors[state], label=f'{state} long.')
-        # transverse (y) – dashed line
-        ax_aniso_sst.loglog(ky_pos, py_pos, '--', color=colors[state], label=f'{state} trans.')
+        k_mom, A_sst, _ = moment_anisotropy(sst, dx, dy)
+        ax_aniso_sst.semilogx(k_mom, A_sst, color=colors[state], label=state)
     ax_aniso_sst.set_xlabel('Wavenumber (cycles/km)')
-    ax_aniso_sst.set_ylabel('Normalized Power')
-    ax_aniso_sst.set_title('SST Orthogonal Spectra')
-    ax_aniso_sst.legend(fontsize='small')
+    ax_aniso_sst.set_ylabel('Anisotropy A = (λ₁-λ₂)/(λ₁+λ₂)')
+    ax_aniso_sst.set_title('SST Spectral Moment Anisotropy')
+    ax_aniso_sst.legend()
     ax_aniso_sst.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- Bottom right: SSH orthogonal spectra ----
+    # ---- Bottom right: SSH spectral moment anisotropy A(k) ----
     for state in states:
         _, ssh = data[state]
-        kx, px, ky, py = orthogonal_power_spectra(ssh, dx, dy)
-        mask_x = kx >= 0
-        mask_y = ky >= 0
-        kx_pos = kx[mask_x]; px_pos = px[mask_x]
-        ky_pos = ky[mask_y]; py_pos = py[mask_y]
-        if px_pos.max() > 0: px_pos = px_pos / px_pos.max()
-        if py_pos.max() > 0: py_pos = py_pos / py_pos.max()
-        ax_aniso_ssh.loglog(kx_pos, px_pos, color=colors[state], label=f'{state} long.')
-        ax_aniso_ssh.loglog(ky_pos, py_pos, '--', color=colors[state], label=f'{state} trans.')
+        k_mom, A_ssh, _ = moment_anisotropy(ssh, dx, dy)
+        ax_aniso_ssh.semilogx(k_mom, A_ssh, color=colors[state], label=state)
     ax_aniso_ssh.set_xlabel('Wavenumber (cycles/km)')
-    ax_aniso_ssh.set_ylabel('Normalized Power')
-    ax_aniso_ssh.set_title('SSH Orthogonal Spectra')
-    ax_aniso_ssh.legend(fontsize='small')
+    ax_aniso_ssh.set_ylabel('Anisotropy A = (λ₁-λ₂)/(λ₁+λ₂)')
+    ax_aniso_ssh.set_title('SSH Spectral Moment Anisotropy')
+    ax_aniso_ssh.legend()
     ax_aniso_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    fig3.suptitle('Spectral Characteristics (Radial & Orthogonal)', fontweight='bold')
+    fig3.suptitle('Spectral Characteristics (Radial & Moment‑Based Anisotropy)', fontweight='bold')
     fig3.tight_layout()
     fig3.savefig("state_spectra_curves.png", dpi=200, bbox_inches='tight')
     if show:
