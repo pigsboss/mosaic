@@ -363,9 +363,8 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
         axes1[idx].set_title(f'{state.capitalize()} SST')
         axes1[idx].set_xlabel('x (km)')
         axes1[idx].set_ylabel('y (km)')
-    plt.colorbar(im, ax=axes1.ravel(), fraction=0.02, pad=0.04, label='Normalized SST')
+    fig1.colorbar(im, ax=axes1.ravel(), fraction=0.02, pad=0.04, label='Normalized SST')
     fig1.suptitle('Sea Surface Temperature: Three Sea States', fontweight='bold')
-    fig1.tight_layout()
     fig1.savefig("state_sst_comparison.png", dpi=200, bbox_inches='tight')
     if show:
         plt.show()
@@ -385,9 +384,8 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
         axes2[idx].set_xlabel('x (km)')
         axes2[idx].set_ylabel('y (km)')
         axes2[idx].set_facecolor('gray')
-    plt.colorbar(im, ax=axes2.ravel(), fraction=0.02, pad=0.04, label='Height (m)')
+    fig2.colorbar(im, ax=axes2.ravel(), fraction=0.02, pad=0.04, label='Height (m)')
     fig2.suptitle('Sea Surface Height Anomaly: Three Sea States', fontweight='bold')
-    fig2.tight_layout()
     fig2.savefig("state_ssh_comparison.png", dpi=200, bbox_inches='tight')
     if show:
         plt.show()
@@ -427,7 +425,6 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     ax_angular.grid(True, which='both', linestyle='--', alpha=0.5)
 
     fig3.suptitle('Spectral Characteristics', fontweight='bold')
-    fig3.tight_layout()
     fig3.savefig("state_spectra_curves.png", dpi=200, bbox_inches='tight')
     if show:
         plt.show()
