@@ -501,13 +501,15 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     plt.close(fig2)
 
     # ----------------------------------------------------------
-    # Figure 3: 2x2 power spectra & anisotropy (now moment-based A(k))
+    # Figure 3: 3×2 panel (isotropic, anisotropy, orientation)
     # ----------------------------------------------------------
-    fig3, ((ax_rad_sst, ax_rad_ssh), (ax_aniso_sst, ax_aniso_ssh)) = plt.subplots(
-        2, 2, figsize=(14, 10))
+    fig3, axes3 = plt.subplots(3, 2, figsize=(14, 15))
+    ((ax_rad_sst, ax_rad_ssh),
+     (ax_aniso_sst, ax_aniso_ssh),
+     (ax_orient_sst, ax_orient_ssh)) = axes3
     colors = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
 
-    # ---- Top left: SST radial power spectrum ----
+    # ---- Row 1, left: SST radial power spectrum (isotropic) ----
     for state in states:
         sst, _ = data[state]
         k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
@@ -519,7 +521,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     ax_rad_sst.legend()
     ax_rad_sst.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- Top right: SSH radial power spectrum ----
+    # ---- Row 1, right: SSH radial power spectrum ----
     for state in states:
         _, ssh = data[state]
         k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
@@ -531,29 +533,53 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     ax_rad_ssh.legend()
     ax_rad_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- Bottom left: SST spectral moment anisotropy A(k) ----
+    # ---- Row 2, left: SST anisotropy degree A(k) ----
     for state in states:
         sst, _ = data[state]
         k_mom, A_sst, _ = moment_anisotropy(sst, dx, dy)
         ax_aniso_sst.semilogx(k_mom, A_sst, color=colors[state], label=state)
     ax_aniso_sst.set_xlabel('Wavenumber (cycles/km)')
     ax_aniso_sst.set_ylabel('Anisotropy A = (λ₁-λ₂)/(λ₁+λ₂)')
-    ax_aniso_sst.set_title('SST Spectral Moment Anisotropy')
+    ax_aniso_sst.set_title('SST Anisotropy Degree')
     ax_aniso_sst.legend()
     ax_aniso_sst.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- Bottom right: SSH spectral moment anisotropy A(k) ----
+    # ---- Row 2, right: SSH anisotropy degree A(k) ----
     for state in states:
         _, ssh = data[state]
         k_mom, A_ssh, _ = moment_anisotropy(ssh, dx, dy)
         ax_aniso_ssh.semilogx(k_mom, A_ssh, color=colors[state], label=state)
     ax_aniso_ssh.set_xlabel('Wavenumber (cycles/km)')
     ax_aniso_ssh.set_ylabel('Anisotropy A = (λ₁-λ₂)/(λ₁+λ₂)')
-    ax_aniso_ssh.set_title('SSH Spectral Moment Anisotropy')
+    ax_aniso_ssh.set_title('SSH Anisotropy Degree')
     ax_aniso_ssh.legend()
     ax_aniso_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    fig3.suptitle('Spectral Characteristics (Radial & Moment‑Based Anisotropy)', fontweight='bold')
+    # ---- Row 3, left: SST principal orientation θ(k) ----
+    for state in states:
+        sst, _ = data[state]
+        k_mom, _, theta_sst = moment_anisotropy(sst, dx, dy)
+        theta_deg = np.degrees(theta_sst)          # convert to degrees
+        ax_orient_sst.semilogx(k_mom, theta_deg, color=colors[state], label=state)
+    ax_orient_sst.set_xlabel('Wavenumber (cycles/km)')
+    ax_orient_sst.set_ylabel('Principal Orientation (deg)')
+    ax_orient_sst.set_title('SST Principal Orientation')
+    ax_orient_sst.legend()
+    ax_orient_sst.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    # ---- Row 3, right: SSH principal orientation θ(k) ----
+    for state in states:
+        _, ssh = data[state]
+        k_mom, _, theta_ssh = moment_anisotropy(ssh, dx, dy)
+        theta_deg = np.degrees(theta_ssh)
+        ax_orient_ssh.semilogx(k_mom, theta_deg, color=colors[state], label=state)
+    ax_orient_ssh.set_xlabel('Wavenumber (cycles/km)')
+    ax_orient_ssh.set_ylabel('Principal Orientation (deg)')
+    ax_orient_ssh.set_title('SSH Principal Orientation')
+    ax_orient_ssh.legend()
+    ax_orient_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    fig3.suptitle('Spectral Characteristics (Isotropic, Anisotropy, Orientation)', fontweight='bold')
     fig3.tight_layout()
     fig3.savefig("state_spectra_curves.png", dpi=200, bbox_inches='tight')
     if show:
