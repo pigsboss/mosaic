@@ -15,8 +15,44 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
 
-from seasurface import generate_multiscale_sst, generate_ssh_from_sst, radial_power_spectrum
+from seasurface import generate_multiscale_sst, generate_ssh_from_sst
 from apertures import full_aperture, golay3, golay9, D_FULL, D_GOLAY, WAVELENGTH
+
+# ----------------------------------------------------------------------
+# Radial power spectrum (copied from seasurface.py to avoid import issues)
+# ----------------------------------------------------------------------
+
+def radial_power_spectrum(field, dx, dy):
+    """Compute 2D radial average power spectrum of a 2D field."""
+    ny, nx = field.shape
+    F = np.fft.fft2(field)
+    psd2d = np.abs(F)**2
+    psd2d_shifted = np.fft.fftshift(psd2d)
+
+    kx = np.fft.fftshift(np.fft.fftfreq(nx, d=dx))
+    ky = np.fft.fftshift(np.fft.fftfreq(ny, d=dy))
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+
+    k_max = np.max(k_rad)
+    n_bins = 100
+    bins = np.linspace(0, k_max, n_bins + 1)
+    radial_psd = np.zeros(n_bins)
+    counts = np.zeros(n_bins)
+
+    for i in range(ny):
+        for j in range(nx):
+            kr = k_rad[i, j]
+            bin_idx = np.digitize(kr, bins) - 1
+            if 0 <= bin_idx < n_bins:
+                radial_psd[bin_idx] += psd2d_shifted[i, j]
+                counts[bin_idx] += 1
+
+    valid = counts > 0
+    radial_psd[valid] /= counts[valid]
+    k_center = 0.5 * (bins[1:] + bins[:-1])
+    return k_center[valid], radial_psd[valid]
+
 
 # ----------------------------------------------------------------------
 # Observation helpers
