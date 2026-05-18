@@ -4,14 +4,18 @@ Generates side‑by‑side comparisons (true vs observed) for:
   - Full aperture (4 m)
   - Golay‑3 (10 m virtual)
   - Golay‑9 (10 m virtual)
-Outputs: obs_sst.png, obs_ssh.png
+
+Also compares the radial power spectra of the true fields and the observed fields
+to demonstrate the loss of high‑frequency information.
+
+Outputs: obs_sst.png, obs_ssh.png, spectra_sst_obs.png, spectra_ssh_obs.png
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
 
-from seasurface import generate_multiscale_sst, generate_ssh_from_sst
+from seasurface import generate_multiscale_sst, generate_ssh_from_sst, radial_power_spectrum
 from apertures import full_aperture, golay3, golay9, D_FULL, D_GOLAY, WAVELENGTH
 
 # ----------------------------------------------------------------------
@@ -117,6 +121,68 @@ def plot_observation_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
 
 
 # ----------------------------------------------------------------------
+# Power spectrum comparison
+# ----------------------------------------------------------------------
+
+def plot_power_spectra_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
+                                  savepath_sst="spectra_sst_obs.png",
+                                  savepath_ssh="spectra_ssh_obs.png",
+                                  show=True):
+    """
+    Compare radial power spectra of true SST/SSH with those of the observed fields
+    from each aperture.  This reveals how much high‑frequency content is lost due to
+    the incomplete frequency coverage of the interferometric systems.
+    """
+    dx = lx / sst.shape[1]
+    dy = ly / sst.shape[0]
+
+    # True spectra
+    k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
+    k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
+
+    apertures = ['Full', 'Golay3', 'Golay9']
+    colors = ['red', 'green', 'blue']
+
+    # ---------- SST ----------
+    fig1, ax1 = plt.subplots(figsize=(8, 5))
+    ax1.loglog(k_sst, psd_sst / psd_sst[0], 'k-', linewidth=2, label='True SST')
+    for name, color in zip(apertures, colors):
+        sst_obs = obs_results[name]['sst_obs']
+        k_obs, psd_obs = radial_power_spectrum(sst_obs, dx, dy)
+        ax1.loglog(k_obs, psd_obs / psd_obs[0], color=color, linestyle='--',
+                   label=f'{name} observed')
+    ax1.set_xlabel('Wavenumber (cycles/km)')
+    ax1.set_ylabel('Normalized Power')
+    ax1.set_title('SST Power Spectra: True vs Observed')
+    ax1.legend()
+    ax1.grid(True, which='both', linestyle='--', alpha=0.5)
+    fig1.tight_layout()
+    fig1.savefig(savepath_sst, dpi=200)
+    if show:
+        plt.show()
+    plt.close(fig1)
+
+    # ---------- SSH ----------
+    fig2, ax2 = plt.subplots(figsize=(8, 5))
+    ax2.loglog(k_ssh, psd_ssh / psd_ssh[0], 'k-', linewidth=2, label='True SSH')
+    for name, color in zip(apertures, colors):
+        ssh_obs = obs_results[name]['ssh_obs']
+        k_obs, psd_obs = radial_power_spectrum(ssh_obs, dx, dy)
+        ax2.loglog(k_obs, psd_obs / psd_obs[0], color=color, linestyle='--',
+                   label=f'{name} observed')
+    ax2.set_xlabel('Wavenumber (cycles/km)')
+    ax2.set_ylabel('Normalized Power')
+    ax2.set_title('SSH Power Spectra: True vs Observed')
+    ax2.legend()
+    ax2.grid(True, which='both', linestyle='--', alpha=0.5)
+    fig2.tight_layout()
+    fig2.savefig(savepath_ssh, dpi=200)
+    if show:
+        plt.show()
+    plt.close(fig2)
+
+
+# ----------------------------------------------------------------------
 # Demo
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
@@ -128,4 +194,6 @@ if __name__ == "__main__":
     obs = generate_observed(sst, ssh, noise_level=0.02)
     print("Plotting comparisons...")
     plot_observation_comparison(sst, ssh, obs, show=True)
-    print("All done! obs_sst.png, obs_ssh.png saved.")
+    print("Comparing power spectra...")
+    plot_power_spectra_comparison(sst, ssh, obs, show=True)
+    print("All done! obs_sst.png, obs_ssh.png, spectra_sst_obs.png, spectra_ssh_obs.png saved.")
