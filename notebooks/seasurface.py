@@ -293,6 +293,12 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
         np.save(f"{state}_sst.npy", sst)
         np.save(f"{state}_ssh.npy", ssh)
 
+        # 保存 SST/SSH 二维图像
+        plot_fields(sst, ssh, lx=lx, ly=ly,
+                    savepath_sst=f"{state}_sst.png",
+                    savepath_ssh=f"{state}_ssh.png",
+                    show=False)
+
         # SST spectrum
         k, psd = radial_power_spectrum(sst, dx, dy)
         ax_sst.loglog(k, psd / psd[0], color=colors[state], label=f'{state} (α≈{state_params[state]["sst"]["alpha"]})')
