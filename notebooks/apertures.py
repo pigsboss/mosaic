@@ -21,9 +21,9 @@ from matplotlib.gridspec import GridSpec
 # Engineering constraints
 # ----------------------------------------------------------------------
 WAVELENGTH = 10.0e-6          # 10 µm (thermal infrared)
-D_FULL     = 70.0             # diameter of monolithic telescope (m)
+D_FULL     = 15.0             # diameter of monolithic telescope (m)
 D_GOLAY    = 70.0             # virtual aperture diameter for Golay arrays (m)
-SUBSIZE    = 3.5              # sub‑aperture diameter (m)
+SUBSIZE    = 15.0             # sub‑aperture diameter (m)
 GEO_HEIGHT = 35_786_000       # geostationary orbit altitude (m)
 
 # Standard Golay‑9 relative positions (unit circle)

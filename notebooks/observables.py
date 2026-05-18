@@ -19,7 +19,10 @@ directly on the scene's angular‑frequency grid.
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-
+from importlib import reload
+import seasurface, apertures
+reload(apertures)
+reload(seasurface)
 from apertures import D_FULL, D_GOLAY, SUBSIZE, WAVELENGTH, GEO_HEIGHT, _GOLAY9_REL
 from seasurface import moment_anisotropy
 
@@ -151,7 +154,7 @@ def compute_otf_for_aperture(aperture_type, shape, dx_m, dy_m, H_m, wavelength_m
 # Visibility‑based observation simulation
 # ----------------------------------------------------------------------
 
-def generate_observed(sst, ssh, lx_km, ly_km, noise_level=0.01):
+def generate_observed(sst, ssh, lx_km, ly_km, noise_level=1e-5):
     """
     Simulate observation through the three apertures by multiplying the
     scene's Fourier transform with the aperture's OTF.
@@ -456,8 +459,8 @@ if __name__ == "__main__":
                         help='Scene width in km (default: 1.0)')
     parser.add_argument('--ly_km', type=float, default=1.0,
                         help='Scene height in km (default: 1.0)')
-    parser.add_argument('--noise', type=float, default=0.02,
-                        help='Observation noise level (default: 0.02)')
+    parser.add_argument('--noise', type=float, default=0.0001,
+                        help='Observation noise level (default: 0.0001)')
     args = parser.parse_args()
 
     lx_km = args.lx_km
