@@ -5,7 +5,7 @@ Optical synthetic aperture pupil functions, PSF and MTF.
 - Golay‑9 (9 sub‑apertures, non‑redundant)
 
 Engineering constraints:
-  - Single aperture diameter = 15 m -> cutoff ~1.5 Mcyc/rad (at 10 µm)
+  - Single aperture diameter = 70 m -> cutoff ~7 Mcyc/rad (at 10 µm)
   - Golay‑3 and Golay‑9 share a virtual aperture of 70 m -> cutoff ~7 Mcyc/rad
   - Sub‑aperture size: 3.5 m
 
@@ -21,7 +21,7 @@ from matplotlib.gridspec import GridSpec
 # Engineering constraints
 # ----------------------------------------------------------------------
 WAVELENGTH = 10.0e-6          # 10 µm (thermal infrared)
-D_FULL     = 15.0             # diameter of monolithic telescope (m)
+D_FULL     = 70.0             # diameter of monolithic telescope (m)
 D_GOLAY    = 70.0             # virtual aperture diameter for Golay arrays (m)
 SUBSIZE    = 3.5              # sub‑aperture diameter (m)
 GEO_HEIGHT = 35_786_000       # geostationary orbit altitude (m)

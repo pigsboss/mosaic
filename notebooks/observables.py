@@ -174,8 +174,8 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SST Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14)
-    fig.tight_layout()
+                 fontweight='bold', fontsize=14, y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_sst, dpi=200, bbox_inches='tight')
     if show:
         plt.show()
@@ -214,8 +214,8 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SSH Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14)
-    fig.tight_layout()
+                 fontweight='bold', fontsize=14, y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_ssh, dpi=200, bbox_inches='tight')
     if show:
         plt.show()
