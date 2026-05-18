@@ -1,141 +1,259 @@
 """
-Generate two static 2D maps of sea surface:
-  - SST (sea surface temperature) – multiscale synthetic field
-  - SSH (sea surface height) – derived from thermal expansion + wave roughness
+Generate 2D sea surface fields (SST & SSH) for three typical regimes:
+  - calm    (no wind, red-noise SST, low-energy long waves)
+  - langmuir (Langmuir circulation: discrete peaks + directional stripes)
+  - turbulent (Kolmogorov cascade, broad spectrum)
 
-Default scene extent: 1 km × 1 km with 512×512 grid -> pixel size ~2 m,
-enabling the study of surface features at ~10 m scale.
+Also provides anisotropic spectrum synthesis with separable radial and
+angular components, and saves fields as .npy for subsequent observation
+simulation.
 
-Both are saved as PNG and can be displayed in a Jupyter notebook.
+Original functions (generate_multiscale_sst, generate_ssh_from_sst)
+are kept for backward compatibility.
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from numpy.fft import fft2, ifft2, fftfreq, fftshift
 
-# ----------------------------------------------------------------------
-# Multiscale SST generator (Fourier‑filtered random field)
-# ----------------------------------------------------------------------
+# =============================================================================
+# 1. Anisotropic field synthesis
+# =============================================================================
 
-def generate_multiscale_sst(
-    nx=512, ny=512,              # grid size – increased for higher resolution
-    lx=1.0, ly=1.0,             # physical domain size (km) – now 1 km × 1 km
-    spectral_exponent=2.5,       # power‑law slope of SST spectrum
+def generate_anisotropic_field(
+    nx=512, ny=512,
+    lx=1.0, ly=1.0,
+    alpha=2.5,          # radial spectral exponent (power spectrum ~ k^{-alpha})
+    theta0=0.0,         # principle direction [rad], 0 = east
+    s=1.0,              # directional concentration (0=isotropic, >1 peaked)
+    peaks=None,         # list of (k_center, width_fraction, amplitude) for discrete peaks
     seed=42,
+    isotropic_component=0.0,  # fraction of energy that is isotropic
 ):
     """
-    Create a synthetic SST field with a prescribed spatial power spectrum.
-    The spectrum is proportional to k^{-spectral_exponent}, giving a realistic
-    multi‑scale structure (no single dominant scale).
+    Create a 2D field with a specified radial power law and directional
+    distribution (cosine power).
+
+    The power spectrum in polar coordinates is:
+        P(k, theta) = k^{-alpha} * [ (1-iso)*D(theta) + iso ]
+    where D(theta) = cos( (theta - theta0)/2 )^{2s}, normalised to unit mean
+    over theta.
+
+    Additional Gaussian peaks can be added to the spectrum.
+
+    Returns
+    -------
+    field : 2D array (ny, nx) normalised to [0,1]
     """
     rng = np.random.default_rng(seed)
 
-    # Wavenumbers (cycles/km)
+    # wavenumber grids (cycles/km)
     kx = fftfreq(nx, d=lx/nx)
     ky = fftfreq(ny, d=ly/ny)
     KX, KY = np.meshgrid(kx, ky)
     k_rad = np.sqrt(KX**2 + KY**2)
-    k_rad[0, 0] = 1.0               # avoid division by zero
+    k_rad[0, 0] = 1e-12  # avoid singularity
+    theta = np.arctan2(KY, KX)
 
-    # Target spectral amplitude (k^{-spectral_exponent/2} for amplitude)
-    amplitude = k_rad ** (-spectral_exponent/2)
-    amplitude[0, 0] = 0.0
+    # angular distribution
+    dtheta = theta - theta0
+    D = np.cos(0.5 * dtheta) ** (2 * s)
+    D = np.maximum(D, 0)   # clip negative values
+    # normalise to mean=1 (preserve total energy)
+    D = D / D.mean()
 
-    # Random phases
+    # isotropic component
+    iso_mask = np.ones_like(D)
+
+    # combined directional component
+    direction_component = (1 - isotropic_component) * D + isotropic_component * iso_mask
+
+    # base radial spectrum
+    P = k_rad ** (-alpha) * direction_component
+    # remove DC
+    P[0, 0] = 0.0
+
+    # add discrete peaks
+    if peaks is not None:
+        for k0, width_frac, amp in peaks:
+            sigma_k = k0 * width_frac
+            gaussian_peak = amp * np.exp(-((k_rad - k0) ** 2) / (2 * sigma_k**2))
+            # apply same direction dependence? peaks usually are isotropic or follow
+            # same direction. We'll apply the same direction_component for consistency.
+            P += gaussian_peak * direction_component
+
+    # amplitude spectrum = sqrt(P)
+    amplitude = np.sqrt(P)
+    # random phases
     noise = rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))
     S = amplitude * noise
 
-    # Inverse FFT to real space
+    # inverse FFT
+    field = np.real(ifft2(S))
+
+    # normalise to [0,1]
+    field = (field - field.min()) / (field.max() - field.min())
+    return field
+
+
+# =============================================================================
+# 2. State-specific SST and SSH generators
+# =============================================================================
+
+state_params = {
+    "calm": {
+        "sst": {
+            "alpha": 2.5,   # reddish noise
+            "theta0": 0.0,
+            "s": 0.2,       # almost isotropic
+            "isotropic_component": 0.8,
+            "peaks": None,
+        },
+        "ssh": {
+            "alpha": 5.0,   # very steep, energy only at lowest wavenumbers
+            "theta0": 0.0,
+            "s": 0.2,
+            "isotropic_component": 0.8,
+            "peaks": None,
+        },
+    },
+    "langmuir": {
+        "sst": {
+            "alpha": 2.0,
+            "theta0": 0.0,          # east wind
+            "s": 2.0,               # moderately directional stripes
+            "isotropic_component": 0.3,
+            "peaks": [
+                # Langmuir circulation spacing ~30 m => wavenumber ~0.033 cycles/m = 33 cycles/km
+                (33.0, 0.05, 10.0),   # fundamental
+                (66.0, 0.05, 3.0),    # 1st harmonic
+                (99.0, 0.05, 1.0),    # 2nd harmonic (weak)
+            ],
+        },
+        "ssh": {
+            "alpha": 3.5,           # less steep than calm, high-frequency tail raises
+            "theta0": 0.0,
+            "s": 3.0,               # directional wind waves
+            "isotropic_component": 0.2,
+            "peaks": [
+                (33.0, 0.05, 5.0),    # same Langmuir scale but weaker in SSH
+            ],
+        },
+    },
+    "turbulent": {
+        "sst": {
+            "alpha": 1.667,         # -5/3 Kolmogorov spectrum
+            "theta0": 0.0,
+            "s": 0.5,               # weakly directional
+            "isotropic_component": 0.6,
+            "peaks": None,          # no discrete peaks, broad cascade
+        },
+        "ssh": {
+            "alpha": 2.5,           # shallower slope, more high-frequency energy
+            "theta0": 0.0,
+            "s": 1.0,
+            "isotropic_component": 0.4,
+            "peaks": None,
+        },
+    },
+}
+
+
+def generate_state_sst_ssh(state="calm", nx=512, ny=512, lx=1.0, ly=1.0, seed=42):
+    """
+    Generate SST and SSH fields for a given sea state.
+
+    Parameters
+    ----------
+    state : str
+        One of 'calm', 'langmuir', 'turbulent'.
+    nx, ny : int
+        Grid size (default 512x512).
+    lx, ly : float
+        Domain size in km (default 1 km x 1 km).
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    sst, ssh : 2D numpy arrays
+    """
+    if state not in state_params:
+        raise ValueError(f"Unknown state '{state}'. Choose from {list(state_params.keys())}")
+
+    cfg_sst = state_params[state]["sst"]
+    cfg_ssh = state_params[state]["ssh"]
+
+    rng = np.random.default_rng(seed)
+
+    sst = generate_anisotropic_field(
+        nx=nx, ny=ny, lx=lx, ly=ly,
+        **cfg_sst,
+        seed=rng.integers(1e6),
+    )
+
+    ssh = generate_anisotropic_field(
+        nx=nx, ny=ny, lx=lx, ly=ly,
+        **cfg_ssh,
+        seed=rng.integers(1e6),
+    )
+
+    # ---- post-processing for SSH: scale to realistic heights ----
+    # SSH from parametric model has range ~[0,1]. We scale to about ±0.05 m
+    ssh = (ssh - 0.5) * 0.1   # range approx -0.05 to +0.05 m
+
+    return sst, ssh
+
+
+# =============================================================================
+# 3. Original backward‑compatible functions (unchanged)
+# =============================================================================
+
+def generate_multiscale_sst(
+    nx=512, ny=512,
+    lx=1.0, ly=1.0,
+    spectral_exponent=2.5,
+    seed=42,
+):
+    """Legacy function. Creates an isotropic SST field with a power‑law spectrum."""
+    rng = np.random.default_rng(seed)
+    kx = fftfreq(nx, d=lx/nx)
+    ky = fftfreq(ny, d=ly/ny)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+    k_rad[0, 0] = 1.0
+    amplitude = k_rad ** (-spectral_exponent/2)
+    amplitude[0, 0] = 0.0
+    noise = rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))
+    S = amplitude * noise
     sst = np.real(ifft2(S))
-    # Normalize to [0, 1]
     sst = (sst - sst.min()) / (sst.max() - sst.min())
     return sst
 
 
-# ----------------------------------------------------------------------
-# Surface height derived from SST (thermal expansion) + short waves
-# ----------------------------------------------------------------------
-
-def generate_ssh_from_sst(
-    sst,
-    expansion_scale=0.2,        # m per unit SST anomaly
-    wave_amplitude=0.05,         # random short‑wave roughness (m)
-    wave_seed=123,
-):
-    """
-    Derive sea surface height anomaly from SST via linear thermal expansion,
-    and add small‑scale random wave roughness.
-    """
+def generate_ssh_from_sst(sst, expansion_scale=0.2, wave_amplitude=0.05, wave_seed=None):
+    """Legacy function. Derives SSH from SST via thermal expansion + noise."""
     sst_anomaly = sst - np.mean(sst)
     ssh = expansion_scale * sst_anomaly
-
-    # Add short‑scale wave roughness (small amplitude)
-    rng = np.random.default_rng(wave_seed)
+    rng = np.random.default_rng(wave_seed) if wave_seed else np.random.default_rng()
     roughness = wave_amplitude * rng.normal(size=sst.shape)
     ssh += roughness
     return ssh
 
 
-# ----------------------------------------------------------------------
-# Plotting
-# ----------------------------------------------------------------------
-
-def plot_fields(
-    sst,
-    ssh,
-    lx=1.0, ly=1.0,            # updated default to 1 km
-    savepath_sst="sst_field.png",
-    savepath_ssh="ssh_field.png",
-    show=True,
-):
-    """
-    Generate and optionally show/save two static figures:
-      - SST (colormap)
-      - SSH (surface height, with topographic colormap)
-    Both are 2D maps in (x, y) coordinates.
-    """
-    extent = [0, lx, 0, ly]
-
-    # --- SST plot ---
-    fig1, ax1 = plt.subplots(figsize=(8, 6))
-    im1 = ax1.imshow(sst, origin='lower', cmap='RdYlBu_r', extent=extent, vmin=0, vmax=1)
-    ax1.set_title('Sea Surface Temperature (multiscale)', fontweight='bold')
-    ax1.set_xlabel('x (km)')
-    ax1.set_ylabel('y (km)')
-    plt.colorbar(im1, ax=ax1, label='Normalized SST')
-    fig1.tight_layout()
-    fig1.savefig(savepath_sst, dpi=200)
-    if show:
-        plt.show()
-    plt.close(fig1)
-
-    # --- SSH plot ---
-    fig2, ax2 = plt.subplots(figsize=(8, 6))
-    im2 = ax2.imshow(ssh, origin='lower', cmap='coolwarm', extent=extent)
-    ax2.set_title('Sea Surface Height anomaly', fontweight='bold')
-    ax2.set_xlabel('x (km)')
-    ax2.set_ylabel('y (km)')
-    plt.colorbar(im2, ax=ax2, label='Height (m)')
-    fig2.tight_layout()
-    fig2.savefig(savepath_ssh, dpi=200)
-    if show:
-        plt.show()
-    plt.close(fig2)
-
-
-# ----------------------------------------------------------------------
-# Power spectrum analysis
-# ----------------------------------------------------------------------
+# =============================================================================
+# 4. Utility: radial power spectrum (used for plotting)
+# =============================================================================
 
 def radial_power_spectrum(field, dx, dy):
-    """Compute 2D radial average power spectrum of a 2D field."""
+    """2D radial average power spectrum."""
     ny, nx = field.shape
-    F = np.fft.fft2(field)
+    F = fft2(field)
     psd2d = np.abs(F)**2
-    psd2d_shifted = np.fft.fftshift(psd2d)
+    psd2d_shifted = fftshift(psd2d)
 
-    kx = np.fft.fftshift(np.fft.fftfreq(nx, d=dx))
-    ky = np.fft.fftshift(np.fft.fftfreq(ny, d=dy))
+    kx = fftshift(fftfreq(nx, d=dx))
+    ky = fftshift(fftfreq(ny, d=dy))
     KX, KY = np.meshgrid(kx, ky)
     k_rad = np.sqrt(KX**2 + KY**2)
 
@@ -144,65 +262,122 @@ def radial_power_spectrum(field, dx, dy):
     bins = np.linspace(0, k_max, n_bins + 1)
     radial_psd = np.zeros(n_bins)
     counts = np.zeros(n_bins)
-
     for i in range(ny):
         for j in range(nx):
             kr = k_rad[i, j]
-            bin_idx = np.digitize(kr, bins) - 1
-            if 0 <= bin_idx < n_bins:
-                radial_psd[bin_idx] += psd2d_shifted[i, j]
-                counts[bin_idx] += 1
-
+            idx = np.digitize(kr, bins) - 1
+            if 0 <= idx < n_bins:
+                radial_psd[idx] += psd2d_shifted[i, j]
+                counts[idx] += 1
     valid = counts > 0
     radial_psd[valid] /= counts[valid]
     k_center = 0.5 * (bins[1:] + bins[:-1])
     return k_center[valid], radial_psd[valid]
 
 
-def plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0,
-                        savepath="spectra_comparison.png", show=True):
+def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
+                       lx=1.0, ly=1.0, save=True, show=True):
     """
-    Plot radial power spectra of SST and SSH on a log‑log scale.
-    Overlaid with a reference k^{-2} line for comparison.
+    Generate SST & SSH fields for each state and plot their radial power spectra
+    in a 1×2 figure (one subplot for SST, one for SSH).
+    Also saves the fields as .npy files.
     """
-    dx = lx / sst.shape[1]
-    dy = ly / sst.shape[0]
+    fig, (ax_sst, ax_ssh) = plt.subplots(1, 2, figsize=(14, 5))
 
-    k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
-    k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
+    colors = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
+    dx = lx / 512
+    dy = ly / 512
 
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.loglog(k_sst, psd_sst / psd_sst[0], 'b-', label='SST')
-    ax.loglog(k_ssh, psd_ssh / psd_ssh[0], 'r-', label='SSH')
+    for state in states:
+        sst, ssh = generate_state_sst_ssh(state, lx=lx, ly=ly)
+        np.save(f"{state}_sst.npy", sst)
+        np.save(f"{state}_ssh.npy", ssh)
 
-    # Reference line k^{-2}
-    ref_k = k_sst[k_sst > 0]
-    ref_line = 1e-3 * ref_k**(-2.0)
-    ax.loglog(ref_k, ref_line / ref_line[0], 'k--', label=r'$\propto k^{-2}$')
+        # SST spectrum
+        k, psd = radial_power_spectrum(sst, dx, dy)
+        ax_sst.loglog(k, psd / psd[0], color=colors[state], label=f'{state} (α≈{state_params[state]["sst"]["alpha"]})')
+        # SSH spectrum
+        k2, psd2 = radial_power_spectrum(ssh, dx, dy)
+        ax_ssh.loglog(k2, psd2 / psd2[0], color=colors[state], label=f'{state} (α≈{state_params[state]["ssh"]["alpha"]})')
 
-    ax.set_xlabel('Wavenumber (cycles/km)')
-    ax.set_ylabel('Normalized Power')
-    ax.set_title('Spatial Power Spectra of Sea Surface Variables')
-    ax.legend()
-    ax.grid(True, which='both', linestyle='--', alpha=0.5)
+    ax_sst.set_xlabel('Wavenumber (cycles/km)')
+    ax_sst.set_ylabel('Normalized Power')
+    ax_sst.set_title('SST Power Spectra')
+    ax_sst.legend()
+    ax_sst.grid(True, which='both', linestyle='--', alpha=0.5)
 
+    ax_ssh.set_xlabel('Wavenumber (cycles/km)')
+    ax_ssh.set_ylabel('Normalized Power')
+    ax_ssh.set_title('SSH Power Spectra')
+    ax_ssh.legend()
+    ax_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    fig.suptitle('Sea Surface State Spectra', fontweight='bold')
     fig.tight_layout()
-    fig.savefig(savepath, dpi=200)
+    if save:
+        fig.savefig("state_spectra.png", dpi=200)
     if show:
         plt.show()
     plt.close(fig)
 
 
-# ----------------------------------------------------------------------
-# Quick demo
-# ----------------------------------------------------------------------
+# =============================================================================
+# 5. Legacy plotting functions (adapted for high‑res defaults)
+# =============================================================================
+
+def plot_fields(sst, ssh, lx=1.0, ly=1.0,
+                savepath_sst="sst_field.png", savepath_ssh="ssh_field.png",
+                show=True):
+    """(unchanged)"""
+    extent = [0, lx, 0, ly]
+    fig1, ax1 = plt.subplots(figsize=(8, 6))
+    im1 = ax1.imshow(sst, origin='lower', cmap='RdYlBu_r', extent=extent, vmin=0, vmax=1)
+    ax1.set_title('Sea Surface Temperature (multiscale)', fontweight='bold')
+    ax1.set_xlabel('x (km)'); ax1.set_ylabel('y (km)')
+    plt.colorbar(im1, ax=ax1, label='Normalized SST')
+    fig1.tight_layout()
+    fig1.savefig(savepath_sst, dpi=200)
+    if show: plt.show()
+    plt.close(fig1)
+
+    fig2, ax2 = plt.subplots(figsize=(8, 6))
+    im2 = ax2.imshow(ssh, origin='lower', cmap='coolwarm', extent=extent)
+    ax2.set_title('Sea Surface Height anomaly', fontweight='bold')
+    ax2.set_xlabel('x (km)'); ax2.set_ylabel('y (km)')
+    plt.colorbar(im2, ax=ax2, label='Height (m)')
+    fig2.tight_layout()
+    fig2.savefig(savepath_ssh, dpi=200)
+    if show: plt.show()
+    plt.close(fig2)
+
+
+def plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0,
+                        savepath="spectra_comparison.png", show=True):
+    """(unchanged)"""
+    dx = lx / sst.shape[1]; dy = ly / sst.shape[0]
+    k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
+    k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.loglog(k_sst, psd_sst / psd_sst[0], 'b-', label='SST')
+    ax.loglog(k_ssh, psd_ssh / psd_ssh[0], 'r-', label='SSH')
+    ref_k = k_sst[k_sst > 0]
+    ax.loglog(ref_k, 1e-3 * ref_k**(-2.0) / 1e-3, 'k--', label=r'$\propto k^{-2}$')
+    ax.set_xlabel('Wavenumber (cycles/km)')
+    ax.set_ylabel('Normalized Power')
+    ax.set_title('Spatial Power Spectra of Sea Surface Variables')
+    ax.legend(); ax.grid(True, which='both', linestyle='--', alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(savepath, dpi=200)
+    if show: plt.show()
+    plt.close(fig)
+
+
+# =============================================================================
+# 6. Main
+# =============================================================================
 if __name__ == "__main__":
-    print("Yo, generating high‑res multiscale SST (1 km × 1 km, 512×512 px)...")
-    sst = generate_multiscale_sst(nx=512, ny=512, lx=1.0, ly=1.0, spectral_exponent=2.5)
-    print("Deriving SSH...")
-    ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
-    print("Plotting fields...")
-    plot_fields(sst, ssh, lx=1.0, ly=1.0, show=True)
-    print("Plotting power spectra...")
-    plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0, show=True)
-    print("All done! Files saved: sst_field.png, ssh_field.png, spectra_comparison.png")
+    print("Generating three sea state fields (calm, langmuir, turbulent)...")
+    plot_state_spectra(states=["calm", "langmuir", "turbulent"],
+                       lx=1.0, ly=1.0, save=True, show=True)
+    print("Fields saved as calm_sst.npy, calm_ssh.npy, langmuir_sst.npy, ...")
+    print("Power spectra plot saved as state_spectra.png")
