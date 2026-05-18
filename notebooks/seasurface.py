@@ -78,8 +78,6 @@ def generate_anisotropic_field(
         for k0, width_frac, amp in peaks:
             sigma_k = k0 * width_frac
             gaussian_peak = amp * np.exp(-((k_rad - k0) ** 2) / (2 * sigma_k**2))
-            # apply same direction dependence? peaks usually are isotropic or follow
-            # same direction. We'll apply the same direction_component for consistency.
             P += gaussian_peak * direction_component
 
     # amplitude spectrum = sqrt(P)
@@ -242,7 +240,7 @@ def generate_ssh_from_sst(sst, expansion_scale=0.2, wave_amplitude=0.05, wave_se
 
 
 # =============================================================================
-# 4. Utility: radial power spectrum (used for plotting)
+# 4. Utility: radial power spectrum, angular anisotropy and 2D PSD
 # =============================================================================
 
 def radial_power_spectrum(field, dx, dy):
@@ -275,6 +273,43 @@ def radial_power_spectrum(field, dx, dy):
     return k_center[valid], radial_psd[valid]
 
 
+def angular_anisotropy(field, dx, dy, n_bins=50):
+    """
+    Calculate angular concentration index per radial wavenumber.
+    Returns:
+        k_centers : 1D array of wavenumber values
+        anisotropy : 1D array of concentration values (0 = isotropic, 1 = fully aligned)
+    """
+    ny, nx = field.shape
+    F = fft2(field)
+    psd2d = np.abs(F)**2
+    kx = fftfreq(nx, d=dx)
+    ky = fftfreq(ny, d=dy)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+    theta = np.arctan2(KY, KX)
+
+    k_max = np.max(k_rad)
+    bins = np.linspace(0, k_max, n_bins + 1)
+    k_centers = 0.5 * (bins[1:] + bins[:-1])
+    anisotropy = np.zeros(n_bins)
+
+    for i in range(n_bins):
+        mask = (k_rad >= bins[i]) & (k_rad < bins[i+1])
+        if np.any(mask):
+            p_vals = psd2d[mask]
+            t_vals = theta[mask]
+            complex_sum = np.sum(p_vals * np.exp(1j * t_vals))
+            total_power = np.sum(p_vals)
+            if total_power > 0:
+                R = np.abs(complex_sum) / total_power
+            else:
+                R = 0.0
+            anisotropy[i] = R
+
+    return k_centers, anisotropy
+
+
 def plot_2d_psd(field, dx, dy, ax, title=""):
     """Plot 2D log power spectrum (kx, ky) on the given Axes."""
     F = np.fft.fft2(field)
@@ -288,10 +323,11 @@ def plot_2d_psd(field, dx, dy, ax, title=""):
     ax.set_title(title)
     ax.set_xlabel('kx (cycles/km)')
     ax.set_ylabel('ky (cycles/km)')
-    # Add a circle at reference wavenumber (e.g., 33 cycles/km for Langmuir)
-    # theta = np.linspace(0, 2*np.pi, 200)
-    # ax.plot(33*np.cos(theta), 33*np.sin(theta), 'w--', alpha=0.5)
 
+
+# =============================================================================
+# 5. State spectra plotting (three figures)
+# =============================================================================
 
 def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
                        lx=1.0, ly=1.0, save=True, show=True):
@@ -299,7 +335,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     Generate three figures:
       - Figure 1: SST fields (1×3)
       - Figure 2: SSH fields (1×3)
-      - Figure 3: Power spectra (1×2, 2D PSD images showing radial and angular information)
+      - Figure 3: Radial power spectra & Angular anisotropy curves
     Also saves all fields as .npy.
     """
     # ----------------------------------------------------------
@@ -327,7 +363,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
         axes1[idx].set_title(f'{state.capitalize()} SST')
         axes1[idx].set_xlabel('x (km)')
         axes1[idx].set_ylabel('y (km)')
-    plt.colorbar(im, ax=axes1, fraction=0.02, pad=0.04, label='Normalized SST')
+    plt.colorbar(im, ax=axes1.ravel(), fraction=0.02, pad=0.04, label='Normalized SST')
     fig1.suptitle('Sea Surface Temperature: Three Sea States', fontweight='bold')
     fig1.tight_layout()
     fig1.savefig("state_sst_comparison.png", dpi=200, bbox_inches='tight')
@@ -348,8 +384,8 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
         axes2[idx].set_title(f'{state.capitalize()} SSH')
         axes2[idx].set_xlabel('x (km)')
         axes2[idx].set_ylabel('y (km)')
-        axes2[idx].set_facecolor('gray')  # highlight land/ocean boundary
-    plt.colorbar(im, ax=axes2, fraction=0.02, pad=0.04, label='Height (m)')
+        axes2[idx].set_facecolor('gray')
+    plt.colorbar(im, ax=axes2.ravel(), fraction=0.02, pad=0.04, label='Height (m)')
     fig2.suptitle('Sea Surface Height Anomaly: Three Sea States', fontweight='bold')
     fig2.tight_layout()
     fig2.savefig("state_ssh_comparison.png", dpi=200, bbox_inches='tight')
@@ -358,25 +394,48 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     plt.close(fig2)
 
     # ----------------------------------------------------------
-    # Figure 3: Power spectra (2D PSD images)
+    # Figure 3: Power spectra & Angular Anisotropy curves
     # ----------------------------------------------------------
-    fig3, (ax_sst_spec, ax_ssh_spec) = plt.subplots(1, 2, figsize=(14, 6))
-    for ax, var_name in zip([ax_sst_spec, ax_ssh_spec], ['SST', 'SSH']):
-        # average the three PSDs? Or show one? Show langmuir as representative?
-        # To keep it clean, we show the Langmuir case because it has clear anisotropic features
-        sst, ssh = data['langmuir']
-        field = sst if var_name == 'SST' else ssh
-        plot_2d_psd(field, dx, dy, ax, title=f'{var_name} 2D Power Spectrum (Langmuir)')
-    fig3.suptitle('Anisotropic Power Spectra (Radial & Angular)', fontweight='bold')
+    fig3, (ax_radial, ax_angular) = plt.subplots(1, 2, figsize=(14, 5))
+    colors = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
+
+    # Radial power spectra for SST (solid) and SSH (dashed)
+    for state in states:
+        sst, ssh = data[state]
+        k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
+        ax_radial.loglog(k_sst, psd_sst / psd_sst[0],
+                         color=colors[state], label=f'{state} SST')
+        k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
+        ax_radial.loglog(k_ssh, psd_ssh / psd_ssh[0],
+                         color=colors[state], linestyle='--', label=f'{state} SSH')
+    ax_radial.set_xlabel('Wavenumber (cycles/km)')
+    ax_radial.set_ylabel('Normalized Power')
+    ax_radial.set_title('Radial Power Spectra')
+    ax_radial.legend(fontsize='small', loc='lower left')
+    ax_radial.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    # Angular anisotropy for the Langmuir case (most anisotropic)
+    sst_l, ssh_l = data['langmuir']
+    k_ang_sst, aniso_sst = angular_anisotropy(sst_l, dx, dy)
+    k_ang_ssh, aniso_ssh = angular_anisotropy(ssh_l, dx, dy)
+    ax_angular.semilogx(k_ang_sst, aniso_sst, color='green', label='SST anisotropy')
+    ax_angular.semilogx(k_ang_ssh, aniso_ssh, color='green', linestyle='--', label='SSH anisotropy')
+    ax_angular.set_xlabel('Wavenumber (cycles/km)')
+    ax_angular.set_ylabel('Directional Concentration R')
+    ax_angular.set_title('Angular Anisotropy (Langmuir)')
+    ax_angular.legend()
+    ax_angular.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    fig3.suptitle('Spectral Characteristics', fontweight='bold')
     fig3.tight_layout()
-    fig3.savefig("state_psd_2d.png", dpi=200, bbox_inches='tight')
+    fig3.savefig("state_spectra_curves.png", dpi=200, bbox_inches='tight')
     if show:
         plt.show()
     plt.close(fig3)
 
 
 # =============================================================================
-# 5. Legacy plotting functions (adapted for high‑res defaults)
+# 6. Legacy plotting functions (unchanged)
 # =============================================================================
 
 def plot_fields(sst, ssh, lx=1.0, ly=1.0,
@@ -427,11 +486,11 @@ def plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0,
 
 
 # =============================================================================
-# 6. Main
+# 7. Main
 # =============================================================================
 if __name__ == "__main__":
     print("Generating three sea state fields and figures...")
     plot_state_spectra(states=["calm", "langmuir", "turbulent"],
                        lx=1.0, ly=1.0, save=True, show=True)
-    print("Figures saved: state_sst_comparison.png, state_ssh_comparison.png, state_psd_2d.png")
+    print("Figures saved: state_sst_comparison.png, state_ssh_comparison.png, state_spectra_curves.png")
     print("Fields saved as .npy files.")
