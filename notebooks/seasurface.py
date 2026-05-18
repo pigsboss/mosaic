@@ -392,37 +392,33 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     plt.close(fig2)
 
     # ----------------------------------------------------------
-    # Figure 3: Power spectra & Angular Anisotropy curves
+    # Figure 3: Radial power spectra for SST (left) and SSH (right)
     # ----------------------------------------------------------
-    fig3, (ax_radial, ax_angular) = plt.subplots(1, 2, figsize=(14, 5))
+    fig3, (ax_sst_radial, ax_ssh_radial) = plt.subplots(1, 2, figsize=(14, 5))
     colors = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
 
-    # Radial power spectra for SST (solid) and SSH (dashed)
     for state in states:
-        sst, ssh = data[state]
+        sst, _ = data[state]
         k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
-        ax_radial.loglog(k_sst, psd_sst / psd_sst[0],
-                         color=colors[state], label=f'{state} SST')
-        k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
-        ax_radial.loglog(k_ssh, psd_ssh / psd_ssh[0],
-                         color=colors[state], linestyle='--', label=f'{state} SSH')
-    ax_radial.set_xlabel('Wavenumber (cycles/km)')
-    ax_radial.set_ylabel('Normalized Power')
-    ax_radial.set_title('Radial Power Spectra')
-    ax_radial.legend(fontsize='small', loc='lower left')
-    ax_radial.grid(True, which='both', linestyle='--', alpha=0.5)
+        ax_sst_radial.loglog(k_sst, psd_sst / psd_sst[0],
+                             color=colors[state], label=state)
 
-    # Angular anisotropy for the Langmuir case (most anisotropic)
-    sst_l, ssh_l = data['langmuir']
-    k_ang_sst, aniso_sst = angular_anisotropy(sst_l, dx, dy)
-    k_ang_ssh, aniso_ssh = angular_anisotropy(ssh_l, dx, dy)
-    ax_angular.semilogx(k_ang_sst, aniso_sst, color='green', label='SST anisotropy')
-    ax_angular.semilogx(k_ang_ssh, aniso_ssh, color='green', linestyle='--', label='SSH anisotropy')
-    ax_angular.set_xlabel('Wavenumber (cycles/km)')
-    ax_angular.set_ylabel('Directional Concentration R')
-    ax_angular.set_title('Angular Anisotropy (Langmuir)')
-    ax_angular.legend()
-    ax_angular.grid(True, which='both', linestyle='--', alpha=0.5)
+        _, ssh = data[state]
+        k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
+        ax_ssh_radial.loglog(k_ssh, psd_ssh / psd_ssh[0],
+                             color=colors[state], label=state)
+
+    ax_sst_radial.set_xlabel('Wavenumber (cycles/km)')
+    ax_sst_radial.set_ylabel('Normalized Power')
+    ax_sst_radial.set_title('SST Radial Power Spectra')
+    ax_sst_radial.legend()
+    ax_sst_radial.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    ax_ssh_radial.set_xlabel('Wavenumber (cycles/km)')
+    ax_ssh_radial.set_ylabel('Normalized Power')
+    ax_ssh_radial.set_title('SSH Radial Power Spectra')
+    ax_ssh_radial.legend()
+    ax_ssh_radial.grid(True, which='both', linestyle='--', alpha=0.5)
 
     fig3.suptitle('Spectral Characteristics', fontweight='bold')
     fig3.savefig("state_spectra_curves.png", dpi=200, bbox_inches='tight')
