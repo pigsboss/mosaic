@@ -10,16 +10,17 @@ Generates three comprehensive comparison figures:
                                        anisotropy degree, orientation;
                                        colours = sea state,
                                        line styles = aperture)
+
+The simulation now uses a visibility‑based (OTF) approach: the scene's Fourier
+transform is multiplied by the aperture's optical transfer function computed
+directly on the scene's angular‑frequency grid.
 """
 
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import fftconvolve
 
-from apertures import (full_aperture, golay3, golay9,
-                       compute_psf,
-                       D_FULL, D_GOLAY)
+from apertures import D_FULL, D_GOLAY, SUBSIZE, WAVELENGTH, GEO_HEIGHT, _GOLAY9_REL
 from seasurface import moment_anisotropy
 
 # ----------------------------------------------------------------------
@@ -59,43 +60,162 @@ def radial_power_spectrum(field, dx, dy):
 
 
 # ----------------------------------------------------------------------
-# PSF‑based observation simulation (spatial convolution)
+# OTF construction (visibility‑based simulation)
 # ----------------------------------------------------------------------
 
-def observe_by_psf(scene, psf, noise_level=0.01):
+def compute_otf_for_aperture(aperture_type, shape, dx_m, dy_m, H_m, wavelength_m):
     """
-    Simulate observation by convolving the scene with the aperture PSF.
-    The PSF is assumed to be already normalised (sum = 1).
+    Build the optical transfer function (OTF) for a given aperture type
+    directly on the angular‑frequency grid that matches the scene's
+    physical sampling.
+
+    Parameters
+    ----------
+    aperture_type : str
+        'full', 'golay3', or 'golay9'.
+    shape : tuple (ny, nx)
+        Number of pixels in y and x.
+    dx_m, dy_m : float
+        Spatial sampling interval in metres.
+    H_m : float
+        Altitude of the observer (metres).
+    wavelength_m : float
+        Observation wavelength (metres).
+
+    Returns
+    -------
+    otf : 2D complex ndarray (ny, nx)
+        OTF normalised so that the zero‑frequency value is 1.
+        The array is in the order expected by np.fft.fft2 (DC at (0,0)).
     """
-    observed = fftconvolve(scene, psf, mode='same')
-    noise = noise_level * np.random.randn(*scene.shape)
-    observed += noise
-    observed = np.clip(observed, scene.min(), scene.max())
-    return observed
+    ny, nx = shape
+    # spatial frequencies (cycles/metre)
+    fx = np.fft.fftfreq(nx, d=dx_m)
+    fy = np.fft.fftfreq(ny, d=dy_m)
+    FX, FY = np.meshgrid(fx, fy)
+    # angular frequencies (cycles/rad)
+    omega_x = FX * H_m
+    omega_y = FY * H_m
+    omega_rad = np.sqrt(omega_x ** 2 + omega_y ** 2)
+
+    # ------------------------------------------------------------------
+    # Coherent transfer function (CTF) mask in angular‑frequency space
+    # ------------------------------------------------------------------
+    if aperture_type == 'full':
+        # For a circular pupil of diameter D, the coherent cutoff is D/(2λ)
+        radius_ctf = (D_FULL / 2.0) / wavelength_m
+        ctf = (omega_rad <= radius_ctf).astype(np.float64)
+
+    elif aperture_type == 'golay3':
+        radius_sub = (SUBSIZE / 2.0) / wavelength_m
+        # circumradius = 0.4 * (D_GOLAY/2)
+        triangle_radius_angular = (0.4 * D_GOLAY / 2.0) / wavelength_m
+        ctf = np.zeros((ny, nx), dtype=np.float64)
+        angles = np.deg2rad([0, 120, 240])
+        for ang in angles:
+            cx = triangle_radius_angular * np.cos(ang)
+            cy = triangle_radius_angular * np.sin(ang)
+            dist = np.sqrt((omega_x - cx) ** 2 + (omega_y - cy) ** 2)
+            ctf += (dist <= radius_sub).astype(np.float64)
+        # binary (no overlap)
+        ctf = (ctf > 0).astype(np.float64)
+
+    elif aperture_type == 'golay9':
+        radius_sub = (SUBSIZE / 2.0) / wavelength_m
+        max_rel = np.max(np.sqrt(_GOLAY9_REL[:, 0] ** 2 + _GOLAY9_REL[:, 1] ** 2))
+        scale_angular = (0.45 * D_GOLAY / 2.0) / (max_rel * wavelength_m)
+        ctf = np.zeros((ny, nx), dtype=np.float64)
+        for pos in _GOLAY9_REL:
+            cx = pos[0] * scale_angular
+            cy = pos[1] * scale_angular
+            dist = np.sqrt((omega_x - cx) ** 2 + (omega_y - cy) ** 2)
+            ctf += (dist <= radius_sub).astype(np.float64)
+        ctf = (ctf > 0).astype(np.float64)
+
+    else:
+        raise ValueError(f"Unknown aperture type '{aperture_type}'. "
+                         "Choose from 'full', 'golay3', 'golay9'.")
+
+    # ------------------------------------------------------------------
+    # OTF = autocorrelation of the CTF
+    # ------------------------------------------------------------------
+    # autocorrelation via FFT: OTF = ifft(|fft(CTF)|^2)
+    ctf_ft = np.fft.fft2(ctf)
+    otf = np.fft.ifft2(np.abs(ctf_ft) ** 2).real
+    otf /= otf.max()   # zero‑frequency value = 1
+
+    return otf
 
 
-def generate_observed(sst, ssh, noise_level=0.01, N=256):
-    """
-    Simulate observation through the three apertures by PSF convolution.
-    Returns dict with observed SST and SSH.
-    """
-    apertures = {
-        'Full':   (full_aperture(N, D_FULL),   D_FULL),
-        'Golay3': (golay3(N, D_GOLAY),         D_GOLAY),
-        'Golay9': (golay9(N, D_GOLAY),         D_GOLAY),
-    }
+# ----------------------------------------------------------------------
+# Visibility‑based observation simulation
+# ----------------------------------------------------------------------
 
+def generate_observed(sst, ssh, lx_km, ly_km, noise_level=0.01):
+    """
+    Simulate observation through the three apertures by multiplying the
+    scene's Fourier transform with the aperture's OTF.
+
+    Parameters
+    ----------
+    sst : 2D ndarray
+        True SST field (already normalised to [0,1]).
+    ssh : 2D ndarray
+        True SSH field (metres).
+    lx_km, ly_km : float
+        Physical extent of the scene in km.
+    noise_level : float
+        Standard deviation of additive Gaussian noise (in the same physical
+        units as the field).
+
+    Returns
+    -------
+    results : dict
+        keys 'Full', 'Golay3', 'Golay9', each containing:
+          'sst_obs' : 2D ndarray
+          'ssh_obs' : 2D ndarray
+    """
+    ny, nx = sst.shape
+    dx_m = (lx_km * 1000.0) / nx
+    dy_m = (ly_km * 1000.0) / ny
+    H_m = GEO_HEIGHT
+    wavelength_m = WAVELENGTH
+
+    aperture_types = ['Full', 'Golay3', 'Golay9']
     results = {}
-    for name, (pupil, diam) in apertures.items():
-        psf, _ = compute_psf(pupil, diam, pad_factor=2)  # PSF already normalised
-        sst_obs = observe_by_psf(sst, psf, noise_level)
-        ssh_obs = observe_by_psf(ssh, psf, noise_level)
+    rng = np.random.default_rng()   # noisy seed – reproducible via global seed if needed
+
+    for name in aperture_types:
+        # nominal type for the helper (lowercase)
+        type_code = name.lower()
+        otf = compute_otf_for_aperture(type_code, (ny, nx),
+                                       dx_m, dy_m, H_m, wavelength_m)
+
+        # SST
+        F_sst = np.fft.fft2(sst)
+        F_sst_obs = F_sst * otf
+        sst_obs = np.real(np.fft.ifft2(F_sst_obs))
+
+        # SSH
+        F_ssh = np.fft.fft2(ssh)
+        F_ssh_obs = F_ssh * otf
+        ssh_obs = np.real(np.fft.ifft2(F_ssh_obs))
+
+        # additive noise
+        sst_obs += noise_level * rng.normal(size=sst.shape)
+        ssh_obs += noise_level * rng.normal(size=ssh.shape)
+
+        # clip to the dynamic range of the original field (preserve physical meaning)
+        sst_obs = np.clip(sst_obs, sst.min(), sst.max())
+        ssh_obs = np.clip(ssh_obs, ssh.min(), ssh.max())
+
         results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs}
+
     return results
 
 
 # =============================================================================
-# New plotting functions (comprehensive comparison figures)
+# Plotting functions (comprehensive comparison figures)
 # =============================================================================
 
 def plot_all_states_observations(true_data, obs_data,
@@ -356,11 +476,11 @@ if __name__ == "__main__":
             print("Run seasurface.py first to generate these files.")
             sys.exit(1)
 
-    # Simulate observations for every state and aperture
+    # Simulate observations for every state and aperture (visibility‑based)
     obs_data = {}
     for state, (sst, ssh) in true_data.items():
         print(f"Simulating observations for {state}...")
-        obs = generate_observed(sst, ssh,
+        obs = generate_observed(sst, ssh, lx_km, ly_km,
                                 noise_level=args.noise)
         obs_data[state] = obs
 
