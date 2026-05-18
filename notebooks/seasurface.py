@@ -126,6 +126,7 @@ state_params = {
                 (33.0, 0.05, 10.0),   # fundamental
                 (66.0, 0.05, 3.0),    # 1st harmonic
                 (99.0, 0.05, 1.0),    # 2nd harmonic (weak)
+                (100.0, 0.03, 8.0),   # 10‑m scale peak (NEW)
             ],
         },
         "ssh": {
@@ -135,6 +136,7 @@ state_params = {
             "isotropic_component": 0.2,
             "peaks": [
                 (33.0, 0.05, 5.0),    # same Langmuir scale but weaker in SSH
+                (100.0, 0.03, 4.0),   # 10‑m scale peak (NEW)
             ],
         },
     },
@@ -144,14 +146,18 @@ state_params = {
             "theta0": 0.0,
             "s": 0.5,               # weakly directional
             "isotropic_component": 0.6,
-            "peaks": None,          # no discrete peaks, broad cascade
+            "peaks": [
+                (100.0, 0.04, 5.0),   # 10‑m scale peak (NEW)
+            ],
         },
         "ssh": {
             "alpha": 2.5,           # shallower slope, more high-frequency energy
             "theta0": 0.0,
             "s": 1.0,
             "isotropic_component": 0.4,
-            "peaks": None,
+            "peaks": [
+                (100.0, 0.04, 3.0),   # 10‑m scale peak (NEW)
+            ],
         },
     },
 }
