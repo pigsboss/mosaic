@@ -228,7 +228,7 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
                                         show=True):
     """
     3×2 panel:
-      row0: radial power (SST left, SSH right)
+      row0: radial power (SST left, SSH right) – observations shifted vertically
       row1: anisotropy A(k) (SST left, SSH right)
       row2: orientation θ(k) (SST left, SSH right)
     Colours = state, linestyles = aperture (True: solid, Full: dashed,
@@ -236,14 +236,18 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
     """
     states = ['calm', 'langmuir', 'turbulent']
     apertures = ['Full', 'Golay3', 'Golay9']
-    # aper -> linestyle
+    # aperture -> linestyle
     ls_map = {'True':  '-',
               'Full':  '--',
               'Golay3': '-.',
               'Golay9': ':'}
     state_color = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
 
-    # one true sst (any state) to get grid spacing (all same size)
+    # vertical shift factors to separate observed spectra from true ones
+    # (radial power only; anisotropy / orientation are kept at original scale)
+    shift_map = {'Full': 2.0, 'Golay3': 4.0, 'Golay9': 8.0}
+
+    # get grid spacing from first true SST (all fields share the same shape)
     sample_sst = true_data[states[0]][0]
     ny, nx = sample_sst.shape
     dx = lx_km / nx
@@ -251,16 +255,16 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
 
     fig, axes = plt.subplots(3, 2, figsize=(16, 15))
 
-    # Helper to plot one panel
     def plot_panel(ax, variable, field_type, log_x=False):
         """
         variable: 'radial', 'anisotropy', 'orientation'
         field_type: 'sst' or 'ssh'
         """
         for state in states:
-            # True field
+            # ---- true field ----
             field = true_data[state][0] if field_type == 'sst' else true_data[state][1]
             color = state_color[state]
+
             if variable == 'radial':
                 k, psd = radial_power_spectrum(field, dx, dy)
                 y = psd / psd[0]
@@ -271,6 +275,7 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
                 k, _, theta = moment_anisotropy(field, dx, dy)
                 y = np.degrees(theta)
 
+            # plot true curve (no shift)
             if log_x:
                 ax.semilogx(k, y, color=color, linestyle=ls_map['True'],
                             linewidth=1.5, label=f'{state} True')
@@ -278,34 +283,36 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
                 ax.loglog(k, y, color=color, linestyle=ls_map['True'],
                           linewidth=1.5, label=f'{state} True')
 
+            # ---- observed fields (with shift for radial power) ----
             for name in apertures:
                 obs_field = obs_data[state][name][f'{field_type}_obs']
+
                 if variable == 'radial':
-                    k, psd = radial_power_spectrum(obs_field, dx, dy)
-                    y = psd / psd[0]
+                    k_obs, psd_obs = radial_power_spectrum(obs_field, dx, dy)
+                    y_obs = psd_obs / psd_obs[0] * shift_map[name]   # <-- offset
                 elif variable == 'anisotropy':
-                    k, A, _ = moment_anisotropy(obs_field, dx, dy)
-                    y = A
-                else:
-                    k, _, theta = moment_anisotropy(obs_field, dx, dy)
-                    y = np.degrees(theta)
+                    k_obs, A_obs, _ = moment_anisotropy(obs_field, dx, dy)
+                    y_obs = A_obs
+                else:  # orientation
+                    k_obs, _, theta_obs = moment_anisotropy(obs_field, dx, dy)
+                    y_obs = np.degrees(theta_obs)
 
                 if log_x:
-                    ax.semilogx(k, y, color=color, linestyle=ls_map[name],
+                    ax.semilogx(k_obs, y_obs, color=color, linestyle=ls_map[name],
                                 linewidth=1.0)
                 else:
-                    ax.loglog(k, y, color=color, linestyle=ls_map[name],
+                    ax.loglog(k_obs, y_obs, color=color, linestyle=ls_map[name],
                               linewidth=1.0)
 
-        # set log scale for x always (radial wavenumber)
+        # axis labels and scales
         if variable == 'radial':
             ax.set_xscale('log')
             ax.set_yscale('log')
-            ax.set_ylabel('Normalized Power')
+            ax.set_ylabel('Normalized Power (offset applied)')
         elif variable == 'anisotropy':
             ax.set_xscale('log')
             ax.set_ylabel('A = (λ₁-λ₂)/(λ₁+λ₂)')
-        else:
+        else:  # orientation
             ax.set_xscale('log')
             ax.set_ylabel('Orientation (deg)')
         ax.set_xlabel('Wavenumber (cyc/km)')
@@ -329,7 +336,7 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
     plot_panel(axes[2, 1], 'orientation', 'ssh')
     axes[2, 1].set_title('Principal Orientation – SSH')
 
-    # Add legend manually (state colour + aperture linestyle)
+    # ---- unified legend ----
     handles = []
     for state in states:
         for aper in ['True'] + apertures:
