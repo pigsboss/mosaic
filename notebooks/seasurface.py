@@ -157,7 +157,7 @@ state_params = {
 }
 
 
-def generate_state_sst_ssh(state="calm", nx=512, ny=512, lx=1.0, ly=1.0, seed=42):
+def generate_state_sst_ssh(state="calm", nx=1024, ny=1024, lx=1.0, ly=1.0, seed=42):
     """
     Generate SST and SSH fields for a given sea state.
 
@@ -166,7 +166,7 @@ def generate_state_sst_ssh(state="calm", nx=512, ny=512, lx=1.0, ly=1.0, seed=42
     state : str
         One of 'calm', 'langmuir', 'turbulent'.
     nx, ny : int
-        Grid size (default 512x512).
+        Grid size (default 1024x1024).
     lx, ly : float
         Domain size in km (default 1 km x 1 km).
     seed : int
@@ -208,7 +208,7 @@ def generate_state_sst_ssh(state="calm", nx=512, ny=512, lx=1.0, ly=1.0, seed=42
 # =============================================================================
 
 def generate_multiscale_sst(
-    nx=512, ny=512,
+    nx=1024, ny=1024,
     lx=1.0, ly=1.0,
     spectral_exponent=2.5,
     seed=42,
@@ -458,8 +458,9 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
         data[state] = (sst, ssh)
 
     extent_img = [0, lx, 0, ly]   # km
-    dx = lx / 512
-    dy = ly / 512
+    # 使用实际生成的场大小计算网格步长
+    dx = lx / data[states[0]][0].shape[1]
+    dy = ly / data[states[0]][0].shape[0]
 
     # ----------------------------------------------------------
     # Figure 1: SST comparison
