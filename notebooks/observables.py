@@ -1,14 +1,9 @@
 """
 Observation pipeline: Apply synthetic aperture systems to SST and SSH fields.
-Generates side‑by‑side comparisons (true vs observed) for:
-  - Full aperture (4 m)
-  - Golay‑3 (10 m virtual)
-  - Golay‑9 (10 m virtual)
+Uses real pupil‑derived MTF, GEO‑height mapping, effective‑region thresholding
+and normalization to recover scene power spectra.
 
-Also compares the radial power spectra of the true fields and the observed fields
-to demonstrate the loss of high‑frequency information.
-
-Outputs: obs_sst.png, obs_ssh.png, spectra_sst_obs.png, spectra_ssh_obs.png
+Generates side‑by‑side comparisons and power‑spectrum comparisons.
 """
 
 import numpy as np
@@ -16,7 +11,9 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
 
 from seasurface import generate_multiscale_sst, generate_ssh_from_sst
-from apertures import full_aperture, golay3, golay9, D_FULL, D_GOLAY, WAVELENGTH
+from apertures import (full_aperture, golay3, golay9,
+                       compute_psf, compute_mtf,
+                       D_FULL, D_GOLAY, GEO_HEIGHT)
 
 # ----------------------------------------------------------------------
 # Radial power spectrum (copied from seasurface.py to avoid import issues)
@@ -26,13 +23,13 @@ def radial_power_spectrum(field, dx, dy):
     """Compute 2D radial average power spectrum of a 2D field."""
     ny, nx = field.shape
     F = np.fft.fft2(field)
-    psd2d = np.abs(F)**2
+    psd2d = np.abs(F) ** 2
     psd2d_shifted = np.fft.fftshift(psd2d)
 
     kx = np.fft.fftshift(np.fft.fftfreq(nx, d=dx))
     ky = np.fft.fftshift(np.fft.fftfreq(ny, d=dy))
     KX, KY = np.meshgrid(kx, ky)
-    k_rad = np.sqrt(KX**2 + KY**2)
+    k_rad = np.sqrt(KX ** 2 + KY ** 2)
 
     k_max = np.max(k_rad)
     n_bins = 100
@@ -55,44 +52,98 @@ def radial_power_spectrum(field, dx, dy):
 
 
 # ----------------------------------------------------------------------
-# Observation helpers
+# Interferometric observation simulation (physical)
 # ----------------------------------------------------------------------
 
-def observe_frequency(scene, pupil, noise_level=0.01):
+def observe_interferometric(scene, pupil, diameter, lx, ly,
+                            noise_level=0.01, threshold=0.1, normalize=True):
     """
-    Simulate observation by masking the scene's Fourier transform with the pupil
-    (which acts as the optical transfer function support), then add noise.
+    Simulate observation through a synthetic aperture using its actual MTF,
+    mapped to angular frequencies via GEO height.
+
+    Parameters
+    ----------
+    scene : 2D numpy array
+    pupil : 2D numpy array (N×N), the aperture pupil function.
+    diameter : float, aperture diameter (m).
+    lx, ly : float, scene width/height in metres.
+    noise_level : float, standard deviation of Gaussian noise.
+    threshold : float, MTF values below this are set to zero.
+    normalize : bool, whether to divide by the MTF in valid regions.
+
+    Returns
+    -------
+    observed : 2D numpy array, the simulated observation.
     """
+    # --- MTF from pupil ---
+    psf, theta = compute_psf(pupil, diameter, pad_factor=1)   # PSF + angular coords (rad)
+    dtheta = theta[1] - theta[0]
+    mtf, freq_ang = compute_mtf(psf, dtheta)                  # MTF and angular frequency (cyc/rad)
+
+    # --- Scene spatial frequency grid ---
+    ny, nx = scene.shape
+    dx = lx / nx
+    dy = ly / ny
+    fx = np.fft.fftfreq(nx, d=dx)     # cycles/m
+    fy = np.fft.fftfreq(ny, d=dy)
+    FX, FY = np.meshgrid(fx, fy)      # shape (ny, nx)
+
+    # Convert to angular frequency (cycles/rad) using GEO height
+    AX = FX * GEO_HEIGHT
+    AY = FY * GEO_HEIGHT
+
+    # --- Interpolate MTF onto scene's angular frequency grid ---
+    interp = RegularGridInterpolator((freq_ang, freq_ang), mtf,
+                                     bounds_error=False, fill_value=0.0)
+    sample = interp(np.stack((AY, AX), axis=-1))   # (ny, nx)
+
+    # --- Apply threshold: zero out low‑MTF regions ---
+    sample[sample < threshold] = 0.0
+
+    # --- Frequency domain observation ---
     F = np.fft.fft2(scene)
-    mask = pupil / pupil.max()            # ensure 0/1
-    F_obs = F * mask
+    if normalize:
+        # Normalize by MTF where supported (avoid division by zero)
+        eps = 1e-12
+        F_obs = F * np.where(sample > 0, 1.0 / (sample + eps), 0.0)
+    else:
+        F_obs = F * sample
+
     observed = np.real(np.fft.ifft2(F_obs))
-    noise = noise_level * np.random.randn(*scene.shape)
+
+    # --- Add independent Gaussian noise in image domain ---
+    noise = noise_level * np.random.randn(ny, nx)
     observed += noise
     observed = np.clip(observed, scene.min(), scene.max())
     return observed
 
 
 # ----------------------------------------------------------------------
-# Main function to generate observed fields for three apertures
+# Generate observations for Full, Golay‑3, Golay‑9
 # ----------------------------------------------------------------------
 
-def generate_observed(sst, ssh, noise_level=0.01, N=256):
+def generate_observed(sst, ssh, noise_level=0.01, N=256,
+                      lx_km=10.0, ly_km=10.0,
+                      threshold=0.1, normalize=True):
     """
-    Simulate observation through Full, Golay‑3, Golay‑9 apertures
-    by frequency‑domain masking (interferometric sampling).
-    Returns dict with observed SST and SSH.
+    Simulate observation through the three apertures.
+    Returns dict with observed SST and SSH for 'Full', 'Golay3', 'Golay9'.
     """
-    pupils = {
-        'Full': full_aperture(N, D_FULL),
-        'Golay3': golay3(N, D_GOLAY),
-        'Golay9': golay9(N, D_GOLAY),
+    lx = lx_km * 1e3      # convert km → m
+    ly = ly_km * 1e3
+
+    apertures = {
+        'Full':   (full_aperture(N, D_FULL),   D_FULL),
+        'Golay3': (golay3(N, D_GOLAY),         D_GOLAY),
+        'Golay9': (golay9(N, D_GOLAY),         D_GOLAY),
     }
 
     results = {}
-    for name, pupil in pupils.items():
-        sst_obs = observe_frequency(sst, pupil, noise_level)
-        ssh_obs = observe_frequency(ssh, pupil, noise_level)
+    for name, (pupil, diam) in apertures.items():
+        sst_obs = observe_interferometric(sst, pupil, diam, lx, ly,
+                                         noise_level, threshold, normalize)
+        ssh_obs = observe_interferometric(ssh, pupil, diam, lx, ly,
+                                         noise_level, threshold, normalize)
         results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs}
     return results
 
@@ -166,8 +217,7 @@ def plot_power_spectra_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
                                   show=True):
     """
     Compare radial power spectra of true SST/SSH with those of the observed fields
-    from each aperture.  This reveals how much high‑frequency content is lost due to
-    the incomplete frequency coverage of the interferometric systems.
+    from each aperture.
     """
     dx = lx / sst.shape[1]
     dy = ly / sst.shape[0]
@@ -226,10 +276,12 @@ if __name__ == "__main__":
     sst = generate_multiscale_sst(nx=256, ny=256, spectral_exponent=2.5)
     print("Deriving SSH...")
     ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
-    print("Running observation simulation...")
-    obs = generate_observed(sst, ssh, noise_level=0.02)
+    print("Running observation simulation (GEO height, MTF, normalization)...")
+    obs = generate_observed(sst, ssh, noise_level=0.02,
+                            lx_km=10.0, ly_km=10.0,
+                            threshold=0.1, normalize=True)
     print("Plotting comparisons...")
     plot_observation_comparison(sst, ssh, obs, show=True)
     print("Comparing power spectra...")
     plot_power_spectra_comparison(sst, ssh, obs, show=True)
-    print("All done! obs_sst.png, obs_ssh.png, spectra_sst_obs.png, spectra_ssh_obs.png saved.")
+    print("All done! Images saved.")
