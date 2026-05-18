@@ -2,6 +2,10 @@
 Generate two static 2D maps of sea surface:
   - SST (sea surface temperature) – multiscale synthetic field
   - SSH (sea surface height) – derived from thermal expansion + wave roughness
+
+Default scene extent: 1 km × 1 km with 512×512 grid -> pixel size ~2 m,
+enabling the study of surface features at ~10 m scale.
+
 Both are saved as PNG and can be displayed in a Jupyter notebook.
 """
 
@@ -14,8 +18,8 @@ from numpy.fft import fft2, ifft2, fftfreq, fftshift
 # ----------------------------------------------------------------------
 
 def generate_multiscale_sst(
-    nx=256, ny=256,              # grid size
-    lx=10.0, ly=10.0,           # physical domain size (km)
+    nx=512, ny=512,              # grid size – increased for higher resolution
+    lx=1.0, ly=1.0,             # physical domain size (km) – now 1 km × 1 km
     spectral_exponent=2.5,       # power‑law slope of SST spectrum
     seed=42,
 ):
@@ -26,14 +30,14 @@ def generate_multiscale_sst(
     """
     rng = np.random.default_rng(seed)
 
-    # Wavenumbers
+    # Wavenumbers (cycles/km)
     kx = fftfreq(nx, d=lx/nx)
     ky = fftfreq(ny, d=ly/ny)
     KX, KY = np.meshgrid(kx, ky)
     k_rad = np.sqrt(KX**2 + KY**2)
     k_rad[0, 0] = 1.0               # avoid division by zero
 
-    # Target spectral amplitude
+    # Target spectral amplitude (k^{-spectral_exponent/2} for amplitude)
     amplitude = k_rad ** (-spectral_exponent/2)
     amplitude[0, 0] = 0.0
 
@@ -79,7 +83,7 @@ def generate_ssh_from_sst(
 def plot_fields(
     sst,
     ssh,
-    lx=10.0, ly=10.0,
+    lx=1.0, ly=1.0,            # updated default to 1 km
     savepath_sst="sst_field.png",
     savepath_ssh="ssh_field.png",
     show=True,
@@ -155,7 +159,7 @@ def radial_power_spectrum(field, dx, dy):
     return k_center[valid], radial_psd[valid]
 
 
-def plot_power_spectrum(sst, ssh, lx=10.0, ly=10.0,
+def plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0,
                         savepath="spectra_comparison.png", show=True):
     """
     Plot radial power spectra of SST and SSH on a log‑log scale.
@@ -193,12 +197,12 @@ def plot_power_spectrum(sst, ssh, lx=10.0, ly=10.0,
 # Quick demo
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Yo, generating multiscale SST...")
-    sst = generate_multiscale_sst(nx=256, ny=256, spectral_exponent=2.5)
+    print("Yo, generating high‑res multiscale SST (1 km × 1 km, 512×512 px)...")
+    sst = generate_multiscale_sst(nx=512, ny=512, lx=1.0, ly=1.0, spectral_exponent=2.5)
     print("Deriving SSH...")
     ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
     print("Plotting fields...")
-    plot_fields(sst, ssh, show=True)
+    plot_fields(sst, ssh, lx=1.0, ly=1.0, show=True)
     print("Plotting power spectra...")
-    plot_power_spectrum(sst, ssh, show=True)
+    plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0, show=True)
     print("All done! Files saved: sst_field.png, ssh_field.png, spectra_comparison.png")
