@@ -117,25 +117,24 @@ state_params = {
     },
     "langmuir": {
         "sst": {
-            "alpha": 2.2,               # slightly steeper than calm, turbulence background
-            "theta0": 0.0,               # wind direction
-            "s": 1.2,                    # moderate directional concentration
-            "isotropic_component": 0.4,  # reduce directional dominance
+            "alpha": 2.2,
+            "theta0": 0.0,
+            "s": 2.0,                    # 恢复较强的方向集中度
+            "isotropic_component": 0.2,  # 减少各向同性分量，凸显方向性
             "peaks": [
-                # broad peak representing Langmuir circulation ~22 m
-                (45.0, 0.2, 3.0),
-                # weaker second harmonic, even wider
-                (90.0, 0.25, 1.5),
+                # 宽峰保留，幅度略微增强以突出 Langmuir 条带
+                (45.0, 0.2, 4.0),
+                (90.0, 0.25, 2.0),
             ],
         },
         "ssh": {
             "alpha": 3.5,
             "theta0": 0.0,
-            "s": 1.5,                    # slightly directional
-            "isotropic_component": 0.5,
+            "s": 2.0,                    # 同样提高方向性
+            "isotropic_component": 0.3,
             "peaks": [
-                (45.0, 0.2, 2.0),        # reduced amplitude in SSH
-                (90.0, 0.25, 0.8),
+                (45.0, 0.2, 3.0),
+                (90.0, 0.25, 1.5),
             ],
         },
     },
