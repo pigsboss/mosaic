@@ -297,7 +297,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
         plot_fields(sst, ssh, lx=lx, ly=ly,
                     savepath_sst=f"{state}_sst.png",
                     savepath_ssh=f"{state}_ssh.png",
-                    show=False)
+                    show=True)
 
         # SST spectrum
         k, psd = radial_power_spectrum(sst, dx, dy)
