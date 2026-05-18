@@ -1,11 +1,12 @@
 """
-Observation pipeline: Apply synthetic aperture systems to SST and SSH fields
+Hey! Observation pipeline: Apply synthetic aperture systems to SST and SSH fields
 that were pre‑computed and saved as .npy files (by seasurface.py).
 
 Usage:
   python observables.py --state calm [--lx_km 1.0] [--ly_km 1.0]
 
-Generates side‑by‑side comparisons and power‑spectrum comparisons.
+Generates side‑by‑side comparisons, power‑spectrum comparisons,
+and aperture‑wise spectral feature analysis.
 """
 
 import sys
@@ -16,6 +17,8 @@ from scipy.interpolate import RegularGridInterpolator
 from apertures import (full_aperture, golay3, golay9,
                        compute_psf, compute_mtf,
                        D_FULL, D_GOLAY, GEO_HEIGHT)
+# 导入 seasurface 的谱分析工具
+from seasurface import moment_anisotropy
 
 # ----------------------------------------------------------------------
 # Radial power spectrum (copied from seasurface.py to avoid import issues)
@@ -130,7 +133,7 @@ def generate_observed(sst, ssh, noise_level=0.01, N=256,
 
 
 # ----------------------------------------------------------------------
-# Plotting comparisons
+# Plotting comparisons (original)
 # ----------------------------------------------------------------------
 
 def plot_observation_comparison(sst, ssh, obs_results, lx=1.0, ly=1.0,
@@ -189,7 +192,7 @@ def plot_observation_comparison(sst, ssh, obs_results, lx=1.0, ly=1.0,
 
 
 # ----------------------------------------------------------------------
-# Power spectrum comparison
+# Power spectrum comparison (original)
 # ----------------------------------------------------------------------
 
 def plot_power_spectra_comparison(sst, ssh, obs_results, lx=1.0, ly=1.0,
@@ -246,6 +249,84 @@ def plot_power_spectra_comparison(sst, ssh, obs_results, lx=1.0, ly=1.0,
 
 
 # ----------------------------------------------------------------------
+# NEW: Aperture‑wise spectral feature analysis (3×3 panels)
+# ----------------------------------------------------------------------
+
+def plot_observed_spectra(sst_true, ssh_true, obs_results, lx=1.0, ly=1.0,
+                         savepath_sst="spectra_sst_apertures.png",
+                         savepath_ssh="spectra_ssh_apertures.png",
+                         show=True):
+    """
+    Compare spectral features (radial, anisotropy, orientation) for each aperture.
+    Generates two 3×3 figures: one for SST, one for SSH.
+    Rows: radial power, anisotropy degree, principal orientation.
+    Columns: Full, Golay3, Golay9.
+    True field curve overlaid in each subplot (black solid line).
+    """
+    apertures = ['Full', 'Golay3', 'Golay9']
+    colors = ['red', 'green', 'blue']
+    dx = lx / sst_true.shape[1]      # km/pixel
+    dy = ly / sst_true.shape[0]
+
+    # ----- helper to plot 3×3 for one variable -----
+    def make_figure(field_true, obs_dict, savepath):
+        fig, axes = plt.subplots(3, 3, figsize=(16, 12))
+
+        # True spectra
+        k_rad, psd_true = radial_power_spectrum(field_true, dx, dy)
+        k_mom, A_true, theta_true = moment_anisotropy(field_true, dx, dy)
+
+        for col, name in enumerate(apertures):
+            field_obs = obs_dict[name]
+            k_rad_obs, psd_obs = radial_power_spectrum(field_obs, dx, dy)
+            k_mom_obs, A_obs, theta_obs = moment_anisotropy(field_obs, dx, dy)
+            color = colors[col]
+
+            # Row 0: radial power spectrum
+            ax = axes[0, col]
+            ax.loglog(k_rad, psd_true / psd_true[0], 'k-', linewidth=1.5, label='True')
+            ax.loglog(k_rad_obs, psd_obs / psd_obs[0], color=color, linestyle='--', label=f'{name}')
+            ax.set_title(f'{name} - Radial Power')
+            ax.set_xlabel('Wavenumber (cyc/km)')
+            ax.set_ylabel('Normalized Power')
+            ax.legend(fontsize='small')
+            ax.grid(True, which='both', linestyle='--', alpha=0.5)
+
+            # Row 1: anisotropy degree
+            ax = axes[1, col]
+            ax.semilogx(k_mom, A_true, 'k-', linewidth=1.5, label='True')
+            ax.semilogx(k_mom_obs, A_obs, color=color, linestyle='--', label=f'{name}')
+            ax.set_title(f'{name} - Anisotropy A(k)')
+            ax.set_xlabel('Wavenumber (cyc/km)')
+            ax.set_ylabel('A = (λ₁-λ₂)/(λ₁+λ₂)')
+            ax.legend(fontsize='small')
+            ax.grid(True, which='both', linestyle='--', alpha=0.5)
+
+            # Row 2: principal orientation
+            ax = axes[2, col]
+            theta_true_deg = np.degrees(theta_true)
+            theta_obs_deg = np.degrees(theta_obs)
+            ax.semilogx(k_mom, theta_true_deg, 'k-', linewidth=1.5, label='True')
+            ax.semilogx(k_mom_obs, theta_obs_deg, color=color, linestyle='--', label=f'{name}')
+            ax.set_title(f'{name} - Orientation θ(k)')
+            ax.set_xlabel('Wavenumber (cyc/km)')
+            ax.set_ylabel('Orientation (deg)')
+            ax.legend(fontsize='small')
+            ax.grid(True, which='both', linestyle='--', alpha=0.5)
+
+        fig.tight_layout()
+        fig.savefig(savepath, dpi=200, bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close(fig)
+
+    # Generate SST figure
+    make_figure(sst_true, {k: v['sst_obs'] for k, v in obs_results.items()}, savepath_sst)
+    # Generate SSH figure
+    make_figure(ssh_true, {k: v['ssh_obs'] for k, v in obs_results.items()}, savepath_ssh)
+
+
+# ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
@@ -285,8 +366,13 @@ if __name__ == "__main__":
     obs = generate_observed(sst, ssh, noise_level=args.noise,
                             lx_km=lx_km, ly_km=ly_km,
                             threshold=args.threshold, normalize=args.normalize)
-    print("Plotting comparisons...")
+    print("Plotting image comparisons...")
     plot_observation_comparison(sst, ssh, obs, lx=lx_km, ly=ly_km, show=True)
-    print("Comparing power spectra...")
+
+    print("Plotting radial power spectra comparison...")
     plot_power_spectra_comparison(sst, ssh, obs, lx=lx_km, ly=ly_km, show=True)
+
+    print("Plotting aperture‑wise spectral features...")
+    plot_observed_spectra(sst, ssh, obs, lx=lx_km, ly=ly_km, show=True)
+
     print("All done! Images saved.")
