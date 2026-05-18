@@ -120,6 +120,76 @@ def plot_fields(
 
 
 # ----------------------------------------------------------------------
+# Power spectrum analysis
+# ----------------------------------------------------------------------
+
+def radial_power_spectrum(field, dx, dy):
+    """Compute 2D radial average power spectrum of a 2D field."""
+    ny, nx = field.shape
+    F = np.fft.fft2(field)
+    psd2d = np.abs(F)**2
+    psd2d_shifted = np.fft.fftshift(psd2d)
+
+    kx = np.fft.fftshift(np.fft.fftfreq(nx, d=dx))
+    ky = np.fft.fftshift(np.fft.fftfreq(ny, d=dy))
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+
+    k_max = np.max(k_rad)
+    n_bins = 100
+    bins = np.linspace(0, k_max, n_bins + 1)
+    radial_psd = np.zeros(n_bins)
+    counts = np.zeros(n_bins)
+
+    for i in range(ny):
+        for j in range(nx):
+            kr = k_rad[i, j]
+            bin_idx = np.digitize(kr, bins) - 1
+            if 0 <= bin_idx < n_bins:
+                radial_psd[bin_idx] += psd2d_shifted[i, j]
+                counts[bin_idx] += 1
+
+    valid = counts > 0
+    radial_psd[valid] /= counts[valid]
+    k_center = 0.5 * (bins[1:] + bins[:-1])
+    return k_center[valid], radial_psd[valid]
+
+
+def plot_power_spectrum(sst, ssh, lx=10.0, ly=10.0,
+                        savepath="spectra_comparison.png", show=True):
+    """
+    Plot radial power spectra of SST and SSH on a log‑log scale.
+    Overlaid with a reference k^{-2} line for comparison.
+    """
+    dx = lx / sst.shape[1]
+    dy = ly / sst.shape[0]
+
+    k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
+    k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.loglog(k_sst, psd_sst / psd_sst[0], 'b-', label='SST')
+    ax.loglog(k_ssh, psd_ssh / psd_ssh[0], 'r-', label='SSH')
+
+    # Reference line k^{-2}
+    ref_k = k_sst[k_sst > 0]
+    ref_line = 1e-3 * ref_k**(-2.0)
+    ax.loglog(ref_k, ref_line / ref_line[0], 'k--', label=r'$\propto k^{-2}$')
+
+    ax.set_xlabel('Wavenumber (cycles/km)')
+    ax.set_ylabel('Normalized Power')
+    ax.set_title('Spatial Power Spectra of Sea Surface Variables')
+    ax.legend()
+    ax.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    fig.tight_layout()
+    fig.savefig(savepath, dpi=200)
+    if show:
+        plt.show()
+    plt.close(fig)
+
+
+# ----------------------------------------------------------------------
 # Quick demo
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
@@ -129,4 +199,6 @@ if __name__ == "__main__":
     ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
     print("Plotting fields...")
     plot_fields(sst, ssh, show=True)
-    print("All done! Files saved: sst_field.png, ssh_field.png")
+    print("Plotting power spectra...")
+    plot_power_spectrum(sst, ssh, show=True)
+    print("All done! Files saved: sst_field.png, ssh_field.png, spectra_comparison.png")
