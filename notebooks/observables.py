@@ -1,16 +1,18 @@
 """
-Observation pipeline: Apply synthetic aperture systems to SST and SSH fields.
-Uses real pupil‑derived MTF, GEO‑height mapping, effective‑region thresholding
-and normalization to recover scene power spectra.
+Observation pipeline: Apply synthetic aperture systems to SST and SSH fields
+that were pre‑computed and saved as .npy files (by seasurface.py).
+
+Usage:
+  python observables.py --state calm [--lx_km 1.0] [--ly_km 1.0]
 
 Generates side‑by‑side comparisons and power‑spectrum comparisons.
 """
 
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
 
-from seasurface import generate_multiscale_sst, generate_ssh_from_sst
 from apertures import (full_aperture, golay3, golay9,
                        compute_psf, compute_mtf,
                        D_FULL, D_GOLAY, GEO_HEIGHT)
@@ -60,50 +62,31 @@ def observe_interferometric(scene, pupil, diameter, lx, ly,
     """
     Simulate observation through a synthetic aperture using its actual MTF,
     mapped to angular frequencies via GEO height.
-
-    Parameters
-    ----------
-    scene : 2D numpy array
-    pupil : 2D numpy array (N×N), the aperture pupil function.
-    diameter : float, aperture diameter (m).
-    lx, ly : float, scene width/height in metres.
-    noise_level : float, standard deviation of Gaussian noise.
-    threshold : float, MTF values below this are set to zero.
-    normalize : bool, whether to divide by the MTF in valid regions.
-
-    Returns
-    -------
-    observed : 2D numpy array, the simulated observation.
     """
     # --- MTF from pupil ---
-    psf, theta = compute_psf(pupil, diameter, pad_factor=1)   # PSF + angular coords (rad)
+    psf, theta = compute_psf(pupil, diameter, pad_factor=1)
     dtheta = theta[1] - theta[0]
-    mtf, freq_ang = compute_mtf(psf, dtheta)                  # MTF and angular frequency (cyc/rad)
+    mtf, freq_ang = compute_mtf(psf, dtheta)
 
     # --- Scene spatial frequency grid ---
     ny, nx = scene.shape
     dx = lx / nx
     dy = ly / ny
-    fx = np.fft.fftfreq(nx, d=dx)     # cycles/m
+    fx = np.fft.fftfreq(nx, d=dx)
     fy = np.fft.fftfreq(ny, d=dy)
-    FX, FY = np.meshgrid(fx, fy)      # shape (ny, nx)
+    FX, FY = np.meshgrid(fx, fy)
 
-    # Convert to angular frequency (cycles/rad) using GEO height
     AX = FX * GEO_HEIGHT
     AY = FY * GEO_HEIGHT
 
-    # --- Interpolate MTF onto scene's angular frequency grid ---
     interp = RegularGridInterpolator((freq_ang, freq_ang), mtf,
                                      bounds_error=False, fill_value=0.0)
-    sample = interp(np.stack((AY, AX), axis=-1))   # (ny, nx)
+    sample = interp(np.stack((AY, AX), axis=-1))
 
-    # --- Apply threshold: zero out low‑MTF regions ---
     sample[sample < threshold] = 0.0
 
-    # --- Frequency domain observation ---
     F = np.fft.fft2(scene)
     if normalize:
-        # Normalize by MTF where supported (avoid division by zero)
         eps = 1e-12
         F_obs = F * np.where(sample > 0, 1.0 / (sample + eps), 0.0)
     else:
@@ -111,7 +94,6 @@ def observe_interferometric(scene, pupil, diameter, lx, ly,
 
     observed = np.real(np.fft.ifft2(F_obs))
 
-    # --- Add independent Gaussian noise in image domain ---
     noise = noise_level * np.random.randn(ny, nx)
     observed += noise
     observed = np.clip(observed, scene.min(), scene.max())
@@ -123,13 +105,12 @@ def observe_interferometric(scene, pupil, diameter, lx, ly,
 # ----------------------------------------------------------------------
 
 def generate_observed(sst, ssh, noise_level=0.01, N=256,
-                      lx_km=10.0, ly_km=10.0,
+                      lx_km=1.0, ly_km=1.0,
                       threshold=0.1, normalize=True):
+    """Simulate observation through the three apertures.
+    lx_km, ly_km : scene extent in km, converted to metres.
     """
-    Simulate observation through the three apertures.
-    Returns dict with observed SST and SSH for 'Full', 'Golay3', 'Golay9'.
-    """
-    lx = lx_km * 1e3      # convert km → m
+    lx = lx_km * 1e3
     ly = ly_km * 1e3
 
     apertures = {
@@ -152,7 +133,7 @@ def generate_observed(sst, ssh, noise_level=0.01, N=256,
 # Plotting comparisons
 # ----------------------------------------------------------------------
 
-def plot_observation_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
+def plot_observation_comparison(sst, ssh, obs_results, lx=1.0, ly=1.0,
                                 savepath_sst='obs_sst.png', savepath_ssh='obs_ssh.png',
                                 show=True):
     """Create two figures: one for SST, one for SSH, each with 4 subplots."""
@@ -211,18 +192,14 @@ def plot_observation_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
 # Power spectrum comparison
 # ----------------------------------------------------------------------
 
-def plot_power_spectra_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
+def plot_power_spectra_comparison(sst, ssh, obs_results, lx=1.0, ly=1.0,
                                   savepath_sst="spectra_sst_obs.png",
                                   savepath_ssh="spectra_ssh_obs.png",
                                   show=True):
-    """
-    Compare radial power spectra of true SST/SSH with those of the observed fields
-    from each aperture.
-    """
+    """Compare radial power spectra of true SST/SSH with observed fields."""
     dx = lx / sst.shape[1]
     dy = ly / sst.shape[0]
 
-    # True spectra
     k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
     k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
 
@@ -269,19 +246,47 @@ def plot_power_spectra_comparison(sst, ssh, obs_results, lx=10.0, ly=10.0,
 
 
 # ----------------------------------------------------------------------
-# Demo
+# Main
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Generating multiscale SST...")
-    sst = generate_multiscale_sst(nx=256, ny=256, spectral_exponent=2.5)
-    print("Deriving SSH...")
-    ssh = generate_ssh_from_sst(sst, expansion_scale=0.2)
-    print("Running observation simulation (GEO height, MTF, normalization)...")
-    obs = generate_observed(sst, ssh, noise_level=0.02,
-                            lx_km=10.0, ly_km=10.0,
-                            threshold=0.1, normalize=True)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Observe pre‑computed sea surface fields with synthetic apertures")
+    parser.add_argument('--state', type=str, default='calm',
+                        choices=['calm', 'langmuir', 'turbulent'],
+                        help='Which sea state to load (default: calm)')
+    parser.add_argument('--lx_km', type=float, default=1.0,
+                        help='Scene width in km (default: 1.0)')
+    parser.add_argument('--ly_km', type=float, default=1.0,
+                        help='Scene height in km (default: 1.0)')
+    parser.add_argument('--noise', type=float, default=0.02,
+                        help='Observation noise level (default: 0.02)')
+    parser.add_argument('--threshold', type=float, default=0.1,
+                        help='MTF threshold for observation (default: 0.1)')
+    parser.add_argument('--normalize', action='store_true', default=True,
+                        help='Normalize MTF in observation (default: True)')
+    parser.add_argument('--no-normalize', dest='normalize', action='store_false')
+    args = parser.parse_args()
+
+    # Load pre‑computed fields
+    try:
+        sst = np.load(f"{args.state}_sst.npy")
+        ssh = np.load(f"{args.state}_ssh.npy")
+        print(f"Loaded {args.state} state fields")
+    except FileNotFoundError:
+        print(f"Error: Could not find {args.state}_sst.npy or {args.state}_ssh.npy.")
+        print("Make sure you have run seasurface.py first to generate these files.")
+        sys.exit(1)
+
+    lx_km = args.lx_km
+    ly_km = args.ly_km
+
+    print("Running observation simulation...")
+    obs = generate_observed(sst, ssh, noise_level=args.noise,
+                            lx_km=lx_km, ly_km=ly_km,
+                            threshold=args.threshold, normalize=args.normalize)
     print("Plotting comparisons...")
-    plot_observation_comparison(sst, ssh, obs, show=True)
+    plot_observation_comparison(sst, ssh, obs, lx=lx_km, ly=ly_km, show=True)
     print("Comparing power spectra...")
-    plot_power_spectra_comparison(sst, ssh, obs, show=True)
+    plot_power_spectra_comparison(sst, ssh, obs, lx=lx_km, ly=ly_km, show=True)
     print("All done! Images saved.")
