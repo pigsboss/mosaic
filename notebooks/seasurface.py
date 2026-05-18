@@ -335,7 +335,7 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     Generate three figures:
       - Figure 1: SST fields (1×3)
       - Figure 2: SSH fields (1×3)
-      - Figure 3: Radial power spectra & Angular anisotropy curves
+      - Figure 3: 2×2 grid of radial power spectra and angular anisotropy
     Also saves all fields as .npy.
     """
     # ----------------------------------------------------------
@@ -392,35 +392,62 @@ def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
     plt.close(fig2)
 
     # ----------------------------------------------------------
-    # Figure 3: Radial power spectra for SST (left) and SSH (right)
+    # Figure 3: 2x2 power spectra & anisotropy
     # ----------------------------------------------------------
-    fig3, (ax_sst_radial, ax_ssh_radial) = plt.subplots(1, 2, figsize=(14, 5))
+    fig3, ((ax_rad_sst, ax_rad_ssh), (ax_aniso_sst, ax_aniso_ssh)) = plt.subplots(
+        2, 2, figsize=(14, 10))
     colors = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
 
+    # ---- Top left: SST radial power spectrum ----
     for state in states:
         sst, _ = data[state]
         k_sst, psd_sst = radial_power_spectrum(sst, dx, dy)
-        ax_sst_radial.loglog(k_sst, psd_sst / psd_sst[0],
-                             color=colors[state], label=state)
+        ax_rad_sst.loglog(k_sst, psd_sst / psd_sst[0],
+                          color=colors[state], label=state)
+    ax_rad_sst.set_xlabel('Wavenumber (cycles/km)')
+    ax_rad_sst.set_ylabel('Normalized Power')
+    ax_rad_sst.set_title('SST Radial Power Spectra')
+    ax_rad_sst.legend()
+    ax_rad_sst.grid(True, which='both', linestyle='--', alpha=0.5)
 
+    # ---- Top right: SSH radial power spectrum ----
+    for state in states:
         _, ssh = data[state]
         k_ssh, psd_ssh = radial_power_spectrum(ssh, dx, dy)
-        ax_ssh_radial.loglog(k_ssh, psd_ssh / psd_ssh[0],
-                             color=colors[state], label=state)
+        ax_rad_ssh.loglog(k_ssh, psd_ssh / psd_ssh[0],
+                          color=colors[state], label=state)
+    ax_rad_ssh.set_xlabel('Wavenumber (cycles/km)')
+    ax_rad_ssh.set_ylabel('Normalized Power')
+    ax_rad_ssh.set_title('SSH Radial Power Spectra')
+    ax_rad_ssh.legend()
+    ax_rad_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    ax_sst_radial.set_xlabel('Wavenumber (cycles/km)')
-    ax_sst_radial.set_ylabel('Normalized Power')
-    ax_sst_radial.set_title('SST Radial Power Spectra')
-    ax_sst_radial.legend()
-    ax_sst_radial.grid(True, which='both', linestyle='--', alpha=0.5)
+    # ---- Bottom left: SST angular anisotropy ----
+    for state in states:
+        sst, _ = data[state]
+        k_a_sst, aniso_sst = angular_anisotropy(sst, dx, dy)
+        ax_aniso_sst.semilogx(k_a_sst, aniso_sst,
+                              color=colors[state], label=state)
+    ax_aniso_sst.set_xlabel('Wavenumber (cycles/km)')
+    ax_aniso_sst.set_ylabel('Directional Concentration R')
+    ax_aniso_sst.set_title('SST Angular Anisotropy')
+    ax_aniso_sst.legend()
+    ax_aniso_sst.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    ax_ssh_radial.set_xlabel('Wavenumber (cycles/km)')
-    ax_ssh_radial.set_ylabel('Normalized Power')
-    ax_ssh_radial.set_title('SSH Radial Power Spectra')
-    ax_ssh_radial.legend()
-    ax_ssh_radial.grid(True, which='both', linestyle='--', alpha=0.5)
+    # ---- Bottom right: SSH angular anisotropy ----
+    for state in states:
+        _, ssh = data[state]
+        k_a_ssh, aniso_ssh = angular_anisotropy(ssh, dx, dy)
+        ax_aniso_ssh.semilogx(k_a_ssh, aniso_ssh,
+                              color=colors[state], label=state)
+    ax_aniso_ssh.set_xlabel('Wavenumber (cycles/km)')
+    ax_aniso_ssh.set_ylabel('Directional Concentration R')
+    ax_aniso_ssh.set_title('SSH Angular Anisotropy')
+    ax_aniso_ssh.legend()
+    ax_aniso_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    fig3.suptitle('Spectral Characteristics', fontweight='bold')
+    fig3.suptitle('Spectral Characteristics (Radial & Anisotropy)', fontweight='bold')
+    fig3.tight_layout()
     fig3.savefig("state_spectra_curves.png", dpi=200, bbox_inches='tight')
     if show:
         plt.show()
