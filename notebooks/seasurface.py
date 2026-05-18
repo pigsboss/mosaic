@@ -117,26 +117,25 @@ state_params = {
     },
     "langmuir": {
         "sst": {
-            "alpha": 2.0,
-            "theta0": 0.0,          # east wind
-            "s": 2.0,               # moderately directional stripes
-            "isotropic_component": 0.3,
+            "alpha": 2.2,               # slightly steeper than calm, turbulence background
+            "theta0": 0.0,               # wind direction
+            "s": 1.2,                    # moderate directional concentration
+            "isotropic_component": 0.4,  # reduce directional dominance
             "peaks": [
-                # Langmuir circulation spacing ~30 m => wavenumber ~0.033 cycles/m = 33 cycles/km
-                (33.0, 0.05, 10.0),   # fundamental
-                (66.0, 0.05, 3.0),    # 1st harmonic
-                (99.0, 0.05, 1.0),    # 2nd harmonic (weak)
-                (100.0, 0.03, 8.0),   # 10‑m scale peak (NEW)
+                # broad peak representing Langmuir circulation ~22 m
+                (45.0, 0.2, 3.0),
+                # weaker second harmonic, even wider
+                (90.0, 0.25, 1.5),
             ],
         },
         "ssh": {
-            "alpha": 3.5,           # less steep than calm, high-frequency tail raises
+            "alpha": 3.5,
             "theta0": 0.0,
-            "s": 3.0,               # directional wind waves
-            "isotropic_component": 0.2,
+            "s": 1.5,                    # slightly directional
+            "isotropic_component": 0.5,
             "peaks": [
-                (33.0, 0.05, 5.0),    # same Langmuir scale but weaker in SSH
-                (100.0, 0.03, 4.0),   # 10‑m scale peak (NEW)
+                (45.0, 0.2, 2.0),        # reduced amplitude in SSH
+                (90.0, 0.25, 0.8),
             ],
         },
     },
@@ -144,20 +143,16 @@ state_params = {
         "sst": {
             "alpha": 1.667,         # -5/3 Kolmogorov spectrum
             "theta0": 0.0,
-            "s": 0.5,               # weakly directional
-            "isotropic_component": 0.6,
-            "peaks": [
-                (100.0, 0.04, 5.0),   # 10‑m scale peak (NEW)
-            ],
+            "s": 0.3,               # very weak directionality
+            "isotropic_component": 0.7,
+            "peaks": None,          # no discrete peaks, pure cascade
         },
         "ssh": {
             "alpha": 2.5,           # shallower slope, more high-frequency energy
             "theta0": 0.0,
-            "s": 1.0,
-            "isotropic_component": 0.4,
-            "peaks": [
-                (100.0, 0.04, 3.0),   # 10‑m scale peak (NEW)
-            ],
+            "s": 0.3,
+            "isotropic_component": 0.7,
+            "peaks": None,
         },
     },
 }
