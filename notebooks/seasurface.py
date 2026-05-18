@@ -275,56 +275,104 @@ def radial_power_spectrum(field, dx, dy):
     return k_center[valid], radial_psd[valid]
 
 
+def plot_2d_psd(field, dx, dy, ax, title=""):
+    """Plot 2D log power spectrum (kx, ky) on the given Axes."""
+    F = np.fft.fft2(field)
+    psd2d = np.abs(F)**2
+    psd2d_shifted = np.fft.fftshift(psd2d)
+    kx = np.fft.fftshift(np.fft.fftfreq(field.shape[1], d=dx))
+    ky = np.fft.fftshift(np.fft.fftfreq(field.shape[0], d=dy))
+    ax.imshow(np.log10(psd2d_shifted + 1e-12),
+              extent=[kx[0], kx[-1], ky[0], ky[-1]],
+              origin='lower', cmap='inferno', aspect='auto')
+    ax.set_title(title)
+    ax.set_xlabel('kx (cycles/km)')
+    ax.set_ylabel('ky (cycles/km)')
+    # Add a circle at reference wavenumber (e.g., 33 cycles/km for Langmuir)
+    # theta = np.linspace(0, 2*np.pi, 200)
+    # ax.plot(33*np.cos(theta), 33*np.sin(theta), 'w--', alpha=0.5)
+
+
 def plot_state_spectra(states=("calm", "langmuir", "turbulent"),
                        lx=1.0, ly=1.0, save=True, show=True):
     """
-    Generate SST & SSH fields for each state and plot their radial power spectra
-    in a 1×2 figure (one subplot for SST, one for SSH).
-    Also saves the fields as .npy files.
+    Generate three figures:
+      - Figure 1: SST fields (1×3)
+      - Figure 2: SSH fields (1×3)
+      - Figure 3: Power spectra (1×2, 2D PSD images showing radial and angular information)
+    Also saves all fields as .npy.
     """
-    fig, (ax_sst, ax_ssh) = plt.subplots(1, 2, figsize=(14, 5))
-
-    colors = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
-    dx = lx / 512
-    dy = ly / 512
-
+    # ----------------------------------------------------------
+    # Generate data & save .npy
+    # ----------------------------------------------------------
+    data = {}
     for state in states:
         sst, ssh = generate_state_sst_ssh(state, lx=lx, ly=ly)
         np.save(f"{state}_sst.npy", sst)
         np.save(f"{state}_ssh.npy", ssh)
+        data[state] = (sst, ssh)
 
-        # 保存 SST/SSH 二维图像
-        plot_fields(sst, ssh, lx=lx, ly=ly,
-                    savepath_sst=f"{state}_sst.png",
-                    savepath_ssh=f"{state}_ssh.png",
-                    show=True)
+    extent_img = [0, lx, 0, ly]   # km
+    dx = lx / 512
+    dy = ly / 512
 
-        # SST spectrum
-        k, psd = radial_power_spectrum(sst, dx, dy)
-        ax_sst.loglog(k, psd / psd[0], color=colors[state], label=f'{state} (α≈{state_params[state]["sst"]["alpha"]})')
-        # SSH spectrum
-        k2, psd2 = radial_power_spectrum(ssh, dx, dy)
-        ax_ssh.loglog(k2, psd2 / psd2[0], color=colors[state], label=f'{state} (α≈{state_params[state]["ssh"]["alpha"]})')
-
-    ax_sst.set_xlabel('Wavenumber (cycles/km)')
-    ax_sst.set_ylabel('Normalized Power')
-    ax_sst.set_title('SST Power Spectra')
-    ax_sst.legend()
-    ax_sst.grid(True, which='both', linestyle='--', alpha=0.5)
-
-    ax_ssh.set_xlabel('Wavenumber (cycles/km)')
-    ax_ssh.set_ylabel('Normalized Power')
-    ax_ssh.set_title('SSH Power Spectra')
-    ax_ssh.legend()
-    ax_ssh.grid(True, which='both', linestyle='--', alpha=0.5)
-
-    fig.suptitle('Sea Surface State Spectra', fontweight='bold')
-    fig.tight_layout()
-    if save:
-        fig.savefig("state_spectra.png", dpi=200)
+    # ----------------------------------------------------------
+    # Figure 1: SST comparison
+    # ----------------------------------------------------------
+    fig1, axes1 = plt.subplots(1, 3, figsize=(18, 5))
+    for idx, state in enumerate(states):
+        sst, _ = data[state]
+        im = axes1[idx].imshow(sst, origin='lower', cmap='RdYlBu_r',
+                               extent=extent_img, vmin=0, vmax=1)
+        axes1[idx].set_title(f'{state.capitalize()} SST')
+        axes1[idx].set_xlabel('x (km)')
+        axes1[idx].set_ylabel('y (km)')
+    plt.colorbar(im, ax=axes1, fraction=0.02, pad=0.04, label='Normalized SST')
+    fig1.suptitle('Sea Surface Temperature: Three Sea States', fontweight='bold')
+    fig1.tight_layout()
+    fig1.savefig("state_sst_comparison.png", dpi=200, bbox_inches='tight')
     if show:
         plt.show()
-    plt.close(fig)
+    plt.close(fig1)
+
+    # ----------------------------------------------------------
+    # Figure 2: SSH comparison
+    # ----------------------------------------------------------
+    fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5))
+    vmin_all = min(data[s][1].min() for s in states)
+    vmax_all = max(data[s][1].max() for s in states)
+    for idx, state in enumerate(states):
+        _, ssh = data[state]
+        im = axes2[idx].imshow(ssh, origin='lower', cmap='coolwarm',
+                               extent=extent_img, vmin=vmin_all, vmax=vmax_all)
+        axes2[idx].set_title(f'{state.capitalize()} SSH')
+        axes2[idx].set_xlabel('x (km)')
+        axes2[idx].set_ylabel('y (km)')
+        axes2[idx].set_facecolor('gray')  # highlight land/ocean boundary
+    plt.colorbar(im, ax=axes2, fraction=0.02, pad=0.04, label='Height (m)')
+    fig2.suptitle('Sea Surface Height Anomaly: Three Sea States', fontweight='bold')
+    fig2.tight_layout()
+    fig2.savefig("state_ssh_comparison.png", dpi=200, bbox_inches='tight')
+    if show:
+        plt.show()
+    plt.close(fig2)
+
+    # ----------------------------------------------------------
+    # Figure 3: Power spectra (2D PSD images)
+    # ----------------------------------------------------------
+    fig3, (ax_sst_spec, ax_ssh_spec) = plt.subplots(1, 2, figsize=(14, 6))
+    for ax, var_name in zip([ax_sst_spec, ax_ssh_spec], ['SST', 'SSH']):
+        # average the three PSDs? Or show one? Show langmuir as representative?
+        # To keep it clean, we show the Langmuir case because it has clear anisotropic features
+        sst, ssh = data['langmuir']
+        field = sst if var_name == 'SST' else ssh
+        plot_2d_psd(field, dx, dy, ax, title=f'{var_name} 2D Power Spectrum (Langmuir)')
+    fig3.suptitle('Anisotropic Power Spectra (Radial & Angular)', fontweight='bold')
+    fig3.tight_layout()
+    fig3.savefig("state_psd_2d.png", dpi=200, bbox_inches='tight')
+    if show:
+        plt.show()
+    plt.close(fig3)
 
 
 # =============================================================================
@@ -382,8 +430,8 @@ def plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0,
 # 6. Main
 # =============================================================================
 if __name__ == "__main__":
-    print("Generating three sea state fields (calm, langmuir, turbulent)...")
+    print("Generating three sea state fields and figures...")
     plot_state_spectra(states=["calm", "langmuir", "turbulent"],
                        lx=1.0, ly=1.0, save=True, show=True)
-    print("Fields saved as calm_sst.npy, calm_ssh.npy, langmuir_sst.npy, ...")
-    print("Power spectra plot saved as state_spectra.png")
+    print("Figures saved: state_sst_comparison.png, state_ssh_comparison.png, state_psd_2d.png")
+    print("Fields saved as .npy files.")
