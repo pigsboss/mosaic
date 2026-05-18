@@ -81,8 +81,8 @@ def observe_interferometric(scene, pupil, diameter, lx, ly,
     fy = np.fft.fftfreq(ny, d=dy)
     FX, FY = np.meshgrid(fx, fy)
 
-    AX = FX * WAVELENGTH * GEO_HEIGHT
-    AY = FY * WAVELENGTH * GEO_HEIGHT
+    AX = FX * GEO_HEIGHT
+    AY = FY * GEO_HEIGHT
 
     interp = RegularGridInterpolator((freq_ang, freq_ang), mtf,
                                      bounds_error=False, fill_value=0.0)
