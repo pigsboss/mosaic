@@ -640,6 +640,231 @@ def plot_power_spectrum(sst, ssh, lx=1.0, ly=1.0,
 
 
 # =============================================================================
+# 8. Time series generation (Proposal 0001)
+# =============================================================================
+
+def interpolate_state_params(state_a, state_b, fraction):
+    """
+    Linearly interpolate spectral parameters between two states.
+
+    Parameters
+    ----------
+    state_a, state_b : dict
+        Dictionaries containing 'alpha', 's', 'isotropic_component',
+        'theta0' and optionally 'peaks' (list of (k_center, width, amplitude)).
+    fraction : float
+        Blending factor in [0, 1].  0 = pure state_a, 1 = pure state_b.
+
+    Returns
+    -------
+    blended : dict
+    """
+    out = {}
+    scalars = ['alpha', 's', 'isotropic_component', 'theta0']
+    for key in scalars:
+        out[key] = (1 - fraction) * state_a[key] + fraction * state_b[key]
+
+    peaks_a = state_a.get('peaks')
+    peaks_b = state_b.get('peaks')
+
+    # resolve None -> empty list
+    if peaks_a is None and peaks_b is None:
+        out['peaks'] = None
+        return out
+
+    if peaks_a is None:
+        peaks_a = []
+    if peaks_b is None:
+        peaks_b = []
+
+    # we assume the peaks lists correspond (same length, same ordering)
+    if len(peaks_a) != len(peaks_b):
+        raise ValueError(
+            f"Number of peaks must match between states for interpolation: "
+            f"{len(peaks_a)} vs {len(peaks_b)}"
+        )
+
+    out_peaks = []
+    for (k0_a, w_a, amp_a), (k0_b, w_b, amp_b) in zip(peaks_a, peaks_b):
+        k0 = (1 - fraction) * k0_a + fraction * k0_b
+        w  = (1 - fraction) * w_a + fraction * w_b
+        amp = (1 - fraction) * amp_a + fraction * amp_b
+        out_peaks.append([k0, w, amp])
+
+    out['peaks'] = out_peaks
+    return out
+
+
+def generate_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
+                        tau0=5.0, tau_alpha=1.0):
+    """
+    Generate a continuous time series of SST and SSH fields using an
+    Ornstein‑Uhlenbeck process in Fourier space with state‑dependent
+    target spectra, as described in Proposal 0001.
+
+    Parameters
+    ----------
+    duration : float
+        Total simulation time in seconds.
+    dt : float
+        Time step in seconds.
+    nx, ny : int
+        Spatial grid size.
+    lx, ly : float
+        Domain size in km.
+    script : list of (t_start, state_name)
+        Timeline of states, e.g. [(0, 'calm'), (3600, 'langmuir')].
+        Times are in seconds.  Must contain at least one entry.
+    seed : int
+        Random seed.
+    tau0 : float
+        Decorrelation time (seconds) at the smallest non‑zero wavenumber.
+    tau_alpha : float
+        Exponent for wavenumber scaling of tau: tau(k) = tau0 * (k_min/k)^tau_alpha.
+
+    Returns
+    -------
+    sst_ts : ndarray of shape (n_frames, ny, nx)
+    ssh_ts : ndarray of shape (n_frames, ny, nx)
+    """
+    rng = np.random.default_rng(seed)
+
+    # sort script by time
+    script = sorted(script, key=lambda x: x[0])
+    if script[0][0] > 0:
+        # ensure we start at t=0 with the first state
+        script.insert(0, (0.0, script[0][1]))
+
+    # ── spatial grids (same units as generate_anisotropic_field) ──────────
+    kx = fftfreq(nx, d=lx / nx)
+    ky = fftfreq(ny, d=ly / ny)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+    # avoid singularity at DC; will be set to zero later in target PSD anyway
+    k_rad[0, 0] = 1e-12
+    theta = np.arctan2(KY, KX)
+
+    # smallest non‑zero wavenumber for tau scaling
+    k_min = np.min(k_rad[k_rad > 0])
+
+    # decorrelation time per wavenumber
+    tau_k = tau0 * (k_min / (k_rad + 1e-12)) ** tau_alpha
+    tau_k[0, 0] = tau0   # arbitrary for DC
+
+    # ── helper: return the blended parameter dict for a given field type ──
+    def _blended_params(t, field_type):
+        # find the segment containing time t
+        n_seg = len(script) - 1
+        i = 0
+        while i < n_seg and t >= script[i+1][0]:
+            i += 1
+        t_start, state_a = script[i]
+        t_end = script[i+1][0] if i < n_seg else t_start
+        state_b = script[i+1][1] if i < n_seg else state_a
+        if t_end - t_start > 1e-9:
+            frac = (t - t_start) / (t_end - t_start)
+        else:
+            frac = 0.0
+        params_a = state_params[state_a][field_type]
+        params_b = state_params[state_b][field_type]
+        return interpolate_state_params(params_a, params_b, frac)
+
+    # ── helper: target power spectrum from parameter dict ─────────────────
+    def _target_psd(params):
+        alpha = params['alpha']
+        theta0 = params['theta0']
+        s = params['s']
+        iso = params['isotropic_component']
+        peaks = params['peaks']
+
+        # angular distribution
+        dtheta = theta - theta0
+        D = np.cos(0.5 * dtheta) ** (2 * s)
+        D = np.maximum(D, 0.0)
+        D = D / D.mean()
+
+        direction = (1 - iso) * D + iso
+        P = k_rad ** (-alpha) * direction
+        P[0, 0] = 0.0
+
+        if peaks is not None:
+            for k0, w, amp in peaks:
+                sigma = k0 * w
+                gauss = amp * np.exp(-((k_rad - k0) ** 2) / (2 * sigma ** 2))
+                P += gauss * direction
+        return P
+
+    # ── initialise Fourier coefficients from the target spectrum at t=0 ──
+    params_sst0 = _blended_params(0.0, 'sst')
+    params_ssh0 = _blended_params(0.0, 'ssh')
+    P_sst0 = _target_psd(params_sst0)
+    P_ssh0 = _target_psd(params_ssh0)
+
+    # amplitude = sqrt(P), phase uniform
+    # We create a full complex noise with unit variance per real/imag, then scale
+    phase0 = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a_sst = np.sqrt(P_sst0) * phase0
+    P0_ssh = P_ssh0.copy()
+    phase0_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a_ssh = np.sqrt(P0_ssh) * phase0_ssh
+
+    # ── pre‑compute phi(k) ───────────────────────────────────────────────
+    phi = np.exp(-dt / tau_k)
+
+    # ── time loop ────────────────────────────────────────────────────────
+    n_frames = int(np.ceil(duration / dt)) + 1
+    sst_ts = np.empty((n_frames, ny, nx), dtype=np.float64)
+    ssh_ts = np.empty((n_frames, ny, nx), dtype=np.float64)
+
+    for idx in range(n_frames):
+        t = idx * dt
+        if t > duration:
+            t = duration
+
+        # blended parameters at this time
+        p_sst = _blended_params(t, 'sst')
+        p_ssh = _blended_params(t, 'ssh')
+
+        P_sst = _target_psd(p_sst)
+        P_ssh = _target_psd(p_ssh)
+
+        # O‑U update: a_new = phi * a_old + sigma * noise
+        sigma_sst = np.sqrt((1 - phi**2) * P_sst)
+        sigma_ssh = np.sqrt((1 - phi**2) * P_ssh)
+
+        # complex noise with unit variance
+        noise_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        noise_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+
+        a_sst = phi * a_sst + sigma_sst * noise_sst
+        a_ssh = phi * a_ssh + sigma_ssh * noise_ssh
+
+        # reconstruct spatial fields
+        sst = np.real(ifft2(a_sst))
+        ssh = np.real(ifft2(a_ssh))
+
+        # normalise to [0,1] like generate_anisotropic_field
+        sst_min, sst_max = sst.min(), sst.max()
+        if sst_max > sst_min:
+            sst = (sst - sst_min) / (sst_max - sst_min)
+        else:
+            sst[:] = 0.5
+
+        ssh_min, ssh_max = ssh.min(), ssh.max()
+        if ssh_max > ssh_min:
+            ssh = (ssh - ssh_min) / (ssh_max - ssh_min)
+        else:
+            ssh[:] = 0.5
+        # apply the same scaling as generate_state_sst_ssh
+        ssh = (ssh - 0.5) * 0.1
+
+        sst_ts[idx] = sst
+        ssh_ts[idx] = ssh
+
+    return sst_ts, ssh_ts
+
+
+# =============================================================================
 # 7. Main
 # =============================================================================
 if __name__ == "__main__":
