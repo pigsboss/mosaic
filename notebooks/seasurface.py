@@ -755,6 +755,18 @@ def generate_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
     k_rad[0, 0] = 1e-12
     theta = np.arctan2(KY, KX)
 
+    # ---- Hermitian half‑plane mask ----
+    half_mask = np.zeros((ny, nx), dtype=bool)
+    for i in range(ny):
+        for j in range(nx):
+            if (kx[j] > 0) or (kx[j] == 0 and ky[i] >= 0):
+                half_mask[i, j] = True
+
+    half_indices = np.where(half_mask)
+    conj_i = (ny - half_indices[0]) % ny
+    conj_j = (nx - half_indices[1]) % nx
+    conj_indices = (conj_i, conj_j)
+
     # smallest non‑zero wavenumber for tau scaling
     k_min = np.min(k_rad[k_rad > 0])
 
@@ -811,13 +823,16 @@ def generate_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
     P_sst0 = _target_psd(params_sst0)
     P_ssh0 = _target_psd(params_ssh0)
 
-    # amplitude = sqrt(P), phase uniform
-    # We create a full complex noise with unit variance per real/imag, then scale
-    phase0 = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-    a_sst = np.sqrt(P_sst0) * phase0
-    P0_ssh = P_ssh0.copy()
-    phase0_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-    a_ssh = np.sqrt(P0_ssh) * phase0_ssh
+    # initialize only active half
+    noise_init_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a_sst = np.zeros((ny, nx), dtype=complex)
+    a_sst[half_indices] = np.sqrt(P_sst0[half_indices]) * noise_init_sst[half_indices]
+    a_sst[conj_indices] = np.conj(a_sst[half_indices])
+
+    noise_init_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a_ssh = np.zeros((ny, nx), dtype=complex)
+    a_ssh[half_indices] = np.sqrt(P_ssh0[half_indices]) * noise_init_ssh[half_indices]
+    a_ssh[conj_indices] = np.conj(a_ssh[half_indices])
 
     # ── pre‑compute phi(k) ───────────────────────────────────────────────
     phi = np.exp(-dt / tau_k)
@@ -839,16 +854,23 @@ def generate_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         P_sst = _target_psd(p_sst)
         P_ssh = _target_psd(p_ssh)
 
-        # O‑U update: a_new = phi * a_old + sigma * noise
         sigma_sst = np.sqrt((1 - phi**2) * P_sst)
         sigma_ssh = np.sqrt((1 - phi**2) * P_ssh)
 
-        # complex noise with unit variance
-        noise_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-        noise_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        # noise only needed on active half
+        noise_full_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        noise_full_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
 
-        a_sst = phi * a_sst + sigma_sst * noise_sst
-        a_ssh = phi * a_ssh + sigma_ssh * noise_ssh
+        # update active half
+        a_sst_half = phi[half_indices] * a_sst[half_indices] + sigma_sst[half_indices] * noise_full_sst[half_indices]
+        a_ssh_half = phi[half_indices] * a_ssh[half_indices] + sigma_ssh[half_indices] * noise_full_ssh[half_indices]
+
+        a_sst[half_indices] = a_sst_half
+        a_ssh[half_indices] = a_ssh_half
+
+        # enforce conjugate symmetry
+        a_sst[conj_indices] = np.conj(a_sst[half_indices])
+        a_ssh[conj_indices] = np.conj(a_ssh[half_indices])
 
         # reconstruct spatial fields (raw, no per‑frame normalization)
         sst = np.real(ifft2(a_sst))
