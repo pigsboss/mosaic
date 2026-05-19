@@ -141,6 +141,24 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         full[conj_indices] = np.conj(half_data)
         return full
 
+    # ── helper: return the blended parameter dict for a given field type ──
+    def _blended_params(t, field_type):
+        # find the segment containing time t
+        n_seg = len(script) - 1
+        i = 0
+        while i < n_seg and t >= script[i+1][0]:
+            i += 1
+        t_start, state_a = script[i]
+        t_end = script[i+1][0] if i < n_seg else t_start
+        state_b = script[i+1][1] if i < n_seg else state_a
+        if t_end - t_start > 1e-9:
+            frac = (t - t_start) / (t_end - t_start)
+        else:
+            frac = 0.0
+        params_a = state_params[state_a][field_type]
+        params_b = state_params[state_b][field_type]
+        return interpolate_state_params(params_a, params_b, frac)
+
     # ---- initialise past states from target spectrum at t=0 ----
     params_sst0 = _blended_params(0.0, 'sst')
     params_ssh0 = _blended_params(0.0, 'ssh')
