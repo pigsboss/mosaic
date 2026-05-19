@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+"""
+Continuous dynamic sea‑surface generation with state transitions and
+optional SST‑SSH coupling.
+
+Based on Proposal 0001:
+  - State parameters interpolated between keyframes (calm → langmuir → turbulent).
+  - Ornstein‑Uhlenbeck process in Fourier space with wavenumber‑dependent memory.
+  - Coupling via a common stochastic driver (coherence ρ).
+
+Requirements:
+  - numpy, matplotlib (for animation), seasurface (for state_params).
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from importlib import reload
+import sys
+sys.path.insert(0, '.')   # ensure local imports work
+import seasurface
+reload(seasurface)
+from seasurface import state_params
+
+# ----------------------------------------------------------------------
+# Internal helper: build target 2D PSD from a parameter dict
+# ----------------------------------------------------------------------
+def _target_psd_from_params(params, k_rad, theta):
+    """2D power spectrum P(kx, ky) according to the anisotropic model."""
+    alpha = params['alpha']
+    theta0 = params['theta0']
+    s = params['s']
+    iso = params['isotropic_component']
+    peaks = params.get('peaks')
+
+    # angular distribution
+    dtheta = theta - theta0
+    D = np.cos(0.5 * dtheta) ** (2 * s)
+    D = np.maximum(D, 0.0)
+    D = D / D.mean()
+
+    direction = (1 - iso) * D + iso
+    P = k_rad ** (-alpha) * direction
+    P[0, 0] = 0.0
+
+    if peaks is not None:
+        for k0, w, amp in peaks:
+            sigma = k0 * w
+            gauss = amp * np.exp(-((k_rad - k0) ** 2) / (2 * sigma ** 2))
+            P += gauss * direction
+    return P
+
+# ----------------------------------------------------------------------
+# Parameter interpolation (imported from seasurface for convenience)
+# ----------------------------------------------------------------------
+interpolate_state_params = seasurface.interpolate_state_params
+
+# ----------------------------------------------------------------------
+# Coupled time‑series generator
+# ----------------------------------------------------------------------
+def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
+                                tau0=5.0, tau_alpha=1.0,
+                                rho=0.0,
+                                save_path=None):
+    """
+    Generate a continuous time series of SST and SSH fields with an
+    Ornstein‑Uhlenbeck process in Fourier space.  A common stochastic
+    driver can be used to introduce coherence between the two fields.
+
+    Parameters
+    ----------
+    duration : float
+        Total simulation time in seconds.
+    dt : float
+        Time step in seconds.
+    nx, ny : int
+        Spatial grid size.
+    lx, ly : float
+        Domain size in km.
+    script : list of (t_start, state_name)
+        Timeline, e.g. [(0, 'calm'), (3600, 'langmuir'), (7200, 'turbulent')].
+        Times in seconds.  Must start at t=0.
+    seed : int
+        Random seed.
+    tau0 : float
+        Decorrelation time (seconds) at the smallest non‑zero wavenumber.
+    tau_alpha : float
+        Exponent for wavenumber scaling: tau(k) = tau0 * (k_min/k)^tau_alpha.
+    rho : float, 0 ≤ ρ ≤ 1
+        Coherence between SST and SSH innovations.
+        ρ=0 → independent fields; ρ=1 → perfectly synchronised random forcing.
+    save_path : str or None
+        If provided, the arrays are saved as ``<save_path>.npz``.
+
+    Returns
+    -------
+    t_out : 1D ndarray (n_frames,)
+    sst_ts : ndarray (n_frames, ny, nx)
+    ssh_ts : ndarray (n_frames, ny, nx)
+    """
+    rng = np.random.default_rng(seed)
+
+    # sort script, ensure start at 0
+    script = sorted(script, key=lambda x: x[0])
+    if script[0][0] > 0:
+        script.insert(0, (0.0, script[0][1]))
+
+    # ---- spatial frequency grids ----
+    kx = np.fft.fftfreq(nx, d=lx / nx)
+    ky = np.fft.fftfreq(ny, d=ly / ny)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+    k_rad[0, 0] = 1e-12               # avoid singularity later
+    theta = np.arctan2(KY, KX)
+
+    # ---- decorrelation time ----
+    k_min = np.min(k_rad[k_rad > 0])
+    tau_k = tau0 * (k_min / (k_rad + 1e-12)) ** tau_alpha
+    tau_k[0, 0] = tau0   # DC (irrelevant)
+    phi = np.exp(-dt / tau_k)
+
+    # ---- helper to get blended parameters for a given time ----
+    def _blended_params(t, field_type):
+        n_seg = len(script) - 1
+        i = 0
+        while i < n_seg and t >= script[i+1][0]:
+            i += 1
+        t_start, state_a = script[i]
+        t_end = script[i+1][0] if i < n_seg else t_start
+        state_b = script[i+1][1] if i < n_seg else state_a
+        frac = max(0.0, min(1.0, (t - t_start) / (t_end - t_start))) if t_end > t_start else 0.0
+        params_a = state_params[state_a][field_type]
+        params_b = state_params[state_b][field_type]
+        return interpolate_state_params(params_a, params_b, frac)
+
+    # ---- initialise Fourier coefficients ----
+    params_sst0 = _blended_params(0.0, 'sst')
+    params_ssh0 = _blended_params(0.0, 'ssh')
+    P_sst0 = _target_psd_from_params(params_sst0, k_rad, theta)
+    P_ssh0 = _target_psd_from_params(params_ssh0, k_rad, theta)
+
+    a_sst = np.sqrt(P_sst0) * (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a_ssh = np.sqrt(P_ssh0) * (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+
+    # ---- time loop ----
+    n_frames = int(np.ceil(duration / dt)) + 1
+    t_out = np.linspace(0, duration, n_frames)
+    sst_ts = np.empty((n_frames, ny, nx), dtype=np.float64)
+    ssh_ts = np.empty((n_frames, ny, nx), dtype=np.float64)
+
+    for idx in range(n_frames):
+        t = t_out[idx]
+        p_sst = _blended_params(t, 'sst')
+        p_ssh = _blended_params(t, 'ssh')
+        P_sst = _target_psd_from_params(p_sst, k_rad, theta)
+        P_ssh = _target_psd_from_params(p_ssh, k_rad, theta)
+
+        sigma_sst = np.sqrt((1 - phi**2) * P_sst)
+        sigma_ssh = np.sqrt((1 - phi**2) * P_ssh)
+
+        # common and independent noise
+        common_noise = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        indep_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        indep_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+
+        # coupling
+        noise_sst = rho * common_noise + np.sqrt(1 - rho**2) * indep_sst
+        noise_ssh = rho * common_noise + np.sqrt(1 - rho**2) * indep_ssh
+
+        a_sst = phi * a_sst + sigma_sst * noise_sst
+        a_ssh = phi * a_ssh + sigma_ssh * noise_ssh
+
+        # spatial fields
+        sst = np.real(np.fft.ifft2(a_sst))
+        ssh = np.real(np.fft.ifft2(a_ssh))
+
+        # normalize to [0,1]
+        sst_min, sst_max = sst.min(), sst.max()
+        if sst_max > sst_min:
+            sst = (sst - sst_min) / (sst_max - sst_min)
+        else:
+            sst[:] = 0.5
+
+        ssh_min, ssh_max = ssh.min(), ssh.max()
+        if ssh_max > ssh_min:
+            ssh = (ssh - ssh_min) / (ssh_max - ssh_min)
+        else:
+            ssh[:] = 0.5
+
+        # SSH scaling as in seasurface.generate_state_sst_ssh
+        ssh = (ssh - 0.5) * 0.1
+
+        sst_ts[idx] = sst
+        ssh_ts[idx] = ssh
+
+    # save if requested
+    if save_path is not None:
+        np.savez(save_path, t=t_out, sst=sst_ts, ssh=ssh_ts,
+                 tau0=tau0, tau_alpha=tau_alpha, rho=rho, script=script)
+
+    return t_out, sst_ts, ssh_ts
+
+
+# ----------------------------------------------------------------------
+# Jupyter animation utilities
+# ----------------------------------------------------------------------
+def animate_fields(t, sst_ts, ssh_ts, lx=1.0, ly=1.0, interval=100, as_html5=True):
+    """
+    Create a dual‑panel animation of SST (left) and SSH (right) evolving in time.
+    Parameters
+    ----------
+    t : 1D array (n_frames,)          time in seconds
+    sst_ts : 3D array (n_frames, ny, nx)
+    ssh_ts : 3D array (n_frames, ny, nx)
+    lx, ly : float                    domain size in km
+    interval : int                    time between frames in ms
+    as_html5 : bool                   if True, return HTML5 <video> tag string;
+                                      otherwise return the FuncAnimation object.
+    Returns
+    -------
+    HTML string or FuncAnimation
+    """
+    from matplotlib import animation
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    extent = [0, lx, 0, ly]
+    im1 = ax1.imshow(sst_ts[0], origin='lower', cmap='RdYlBu_r',
+                     extent=extent, vmin=0, vmax=1, animated=True)
+    ax1.set_title('SST')
+    ax1.set_xlabel('x (km)'); ax1.set_ylabel('y (km)')
+    plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+
+    # SSH color limits from full range
+    vmin_ssh, vmax_ssh = ssh_ts.min(), ssh_ts.max()
+    im2 = ax2.imshow(ssh_ts[0], origin='lower', cmap='coolwarm',
+                     extent=extent, vmin=vmin_ssh, vmax=vmax_ssh, animated=True)
+    ax2.set_title('SSH')
+    ax2.set_xlabel('x (km)'); ax2.set_ylabel('y (km)')
+    plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+    time_text = fig.suptitle(f't = {t[0]:.1f} s')
+
+    def update(frame):
+        im1.set_array(sst_ts[frame])
+        im2.set_array(ssh_ts[frame])
+        time_text.set_text(f't = {t[frame]:.1f} s')
+        return im1, im2, time_text
+
+    ani = FuncAnimation(fig, update, frames=len(t),
+                        interval=interval, blit=True, repeat=True)
+    plt.close(fig)
+    if as_html5:
+        return ani.to_html5_video()
+    else:
+        return ani
+
+
+# ----------------------------------------------------------------------
+# Spectral evolution snapshot plot
+# ----------------------------------------------------------------------
+def plot_spectral_evolution(t, sst_ts, ssh_ts, lx=1.0, ly=1.0,
+                            times=None, n_snapshots=5):
+    """
+    Show radial power spectrum at several time snapshots for SST and SSH.
+    Parameters
+    ----------
+    t : 1D array
+    sst_ts, ssh_ts : 3D arrays
+    lx, ly : float
+    times : list of floats or None.  If None, n_snapshots equally spaced times.
+    n_snapshots : int
+
+    Returns
+    -------
+    fig
+    """
+    ny, nx = sst_ts.shape[1:]
+    dx = lx / nx
+    dy = ly / ny
+
+    if times is None:
+        indices = np.linspace(0, len(t)-1, n_snapshots, dtype=int)
+        times = t[indices]
+    else:
+        indices = [np.argmin(np.abs(t - time)) for time in times]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    cmap = plt.cm.viridis
+    colors = cmap(np.linspace(0, 1, len(indices)))
+
+    for idx, time, color in zip(indices, times, colors):
+        sst_frame = sst_ts[idx]
+        ssh_frame = ssh_ts[idx]
+        k_sst, psd_sst = seasurface.radial_power_spectrum(sst_frame, dx, dy)
+        k_ssh, psd_ssh = seasurface.radial_power_spectrum(ssh_frame, dx, dy)
+        ax1.loglog(k_sst, psd_sst/psd_sst[0], color=color, label=f'{time:.0f} s')
+        ax2.loglog(k_ssh, psd_ssh/psd_ssh[0], color=color, label=f'{time:.0f} s')
+
+    ax1.set_title('SST Radial Power Spectra')
+    ax2.set_title('SSH Radial Power Spectra')
+    for ax in (ax1, ax2):
+        ax.set_xlabel('Wavenumber (cyc/km)')
+        ax.set_ylabel('Normalized Power')
+        ax.legend()
+        ax.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    fig.tight_layout()
+    return fig
+
+
+# =============================================================================
+# Main – demo
+# =============================================================================
+if __name__ == "__main__":
+    # Quick demonstration: generate a 2‑hour cycle calm→langmuir→turbulent→calm
+    script_demo = [
+        (0,       'calm'),
+        (1800,    'langmuir'),
+        (3600,    'turbulent'),
+        (5400,    'calm'),
+        (7200,    'calm'),        # stay calm until end
+    ]
+    duration = 7200   # 2 hours
+    dt = 60           # time step (seconds)
+    nx, ny = 256, 256
+    lx = 1.0          # km
+    ly = 1.0
+
+    print("Generating coupled SST/SSH time series (ρ=0.3)...")
+    t, sst, ssh = generate_coupled_timeseries(
+        duration, dt, nx, ny, lx, ly, script_demo,
+        tau0=600.0, tau_alpha=0.8, rho=0.3,
+        save_path="dynamic_cycle.npz"
+    )
+    print(f"Saved dynamic_cycle.npz with shape {sst.shape}")
+
+    # produce an HTML5 animation (if running in a Jupyter notebook, you can display it)
+    try:
+        video = animate_fields(t, sst, ssh, lx=lx, ly=ly, interval=80, as_html5=True)
+        with open("dynamic_cycle.html", "w") as f:
+            f.write(f"<html><body>{video}</body></html>")
+        print("Animation saved as dynamic_cycle.html (open in browser).")
+    except (ImportError, RuntimeError) as e:
+        print("Could not create HTML5 animation (maybe no ffmpeg):", e)
+
+    # show a few spectral snapshots
+    fig = plot_spectral_evolution(t, sst, ssh, lx=lx, ly=ly, n_snapshots=5)
+    fig.savefig("dynamic_spectra_evolution.png", dpi=150)
+    print("Saved dynamic_spectra_evolution.png")
+    plt.show()
