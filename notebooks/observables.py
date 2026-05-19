@@ -36,7 +36,6 @@ def radial_power_spectrum(field, dx, dy, mask=None):
     psd2d = np.abs(F) ** 2
 
     if mask is not None:
-        # 只保留掩膜内的功率
         psd2d = np.where(mask, psd2d, 0.0)
 
     psd2d_shifted = np.fft.fftshift(psd2d)
@@ -45,20 +44,20 @@ def radial_power_spectrum(field, dx, dy, mask=None):
     KX, KY = np.meshgrid(kx, ky)
     k_rad = np.sqrt(KX ** 2 + KY ** 2)
 
-    # 如果有掩膜，只统计掩膜内像素（避免稀释平均）
     if mask is not None:
         mask_shifted = np.fft.fftshift(mask)
         valid = mask_shifted
     else:
         valid = np.ones_like(k_rad, dtype=bool)
 
-    k_max = np.max(k_rad[valid])
+    # 固定使用全图最大波数，保证所有曲线的 bins 一致
+    k_max = np.max(k_rad)
     n_bins = 100
     bins = np.linspace(0, k_max, n_bins + 1)
     radial_psd = np.zeros(n_bins)
     counts = np.zeros(n_bins)
 
-    # 只遍历有效像素
+    # 只遍历掩膜内像素
     idx, idy = np.where(valid)
     for i, j in zip(idx, idy):
         kr = k_rad[i, j]
@@ -67,10 +66,12 @@ def radial_power_spectrum(field, dx, dy, mask=None):
             radial_psd[bin_idx] += psd2d_shifted[i, j]
             counts[bin_idx] += 1
 
-    valid_bins = counts > 0
-    radial_psd[valid_bins] /= counts[valid_bins]
+    # 平均；无数据的 bin 保持 0
+    nonzero = counts > 0
+    radial_psd[nonzero] /= counts[nonzero]
+
     k_center = 0.5 * (bins[1:] + bins[:-1])
-    return k_center[valid_bins], radial_psd[valid_bins]
+    return k_center, radial_psd
 
 
 # ----------------------------------------------------------------------
