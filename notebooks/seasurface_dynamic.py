@@ -129,38 +129,33 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
     k_min = np.min(k_rad[k_rad > 0])
     tau_k = tau0 * (k_min / (k_rad + 1e-12)) ** tau_alpha
     tau_k[0, 0] = tau0   # DC (irrelevant)
-    phi = np.exp(-dt / tau_k)
 
-    # ---- helper to get blended parameters for a given time ----
-    def _blended_params(t, field_type):
-        n_seg = len(script) - 1
-        i = 0
-        while i < n_seg and t >= script[i+1][0]:
-            i += 1
-        t_start, state_a = script[i]
-        t_end = script[i+1][0] if i < n_seg else t_start
-        state_b = script[i+1][1] if i < n_seg else state_a
-        frac = max(0.0, min(1.0, (t - t_start) / (t_end - t_start))) if t_end > t_start else 0.0
-        params_a = state_params[state_a][field_type]
-        params_b = state_params[state_b][field_type]
-        return interpolate_state_params(params_a, params_b, frac)
+    # ---- AR(2) coefficient arrays ----
+    p_exp = np.exp(-dt / tau_k)
+    p2 = p_exp ** 2
+    sigma_ar2_full = np.sqrt(np.maximum(1e-30, (1 - p2) ** 3 / (1 + p2)))
 
-    # ---- initialise Fourier coefficients ----
+    def _fill_full(half_data):
+        full = np.zeros((ny, nx), dtype=complex)
+        full[half_indices] = half_data
+        full[conj_indices] = np.conj(half_data)
+        return full
+
+    # ---- initialise past states from target spectrum at t=0 ----
     params_sst0 = _blended_params(0.0, 'sst')
     params_ssh0 = _blended_params(0.0, 'ssh')
     P_sst0 = _target_psd_from_params(params_sst0, k_rad, theta)
     P_ssh0 = _target_psd_from_params(params_ssh0, k_rad, theta)
 
-    # initialize only active half
-    noise_sst_init = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-    a_sst = np.zeros((ny, nx), dtype=complex)
-    a_sst[half_indices] = np.sqrt(P_sst0[half_indices]) * noise_sst_init[half_indices]
-    a_sst[conj_indices] = np.conj(a_sst[half_indices])
+    noise1_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    noise2_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a2_sst = np.sqrt(P_sst0[half_indices]) * noise1_sst[half_indices]
+    a1_sst = np.sqrt(P_sst0[half_indices]) * noise2_sst[half_indices]
 
-    noise_ssh_init = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-    a_ssh = np.zeros((ny, nx), dtype=complex)
-    a_ssh[half_indices] = np.sqrt(P_ssh0[half_indices]) * noise_ssh_init[half_indices]
-    a_ssh[conj_indices] = np.conj(a_ssh[half_indices])
+    noise1_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    noise2_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a2_ssh = np.sqrt(P_ssh0[half_indices]) * noise1_ssh[half_indices]
+    a1_ssh = np.sqrt(P_ssh0[half_indices]) * noise2_ssh[half_indices]
 
     # ---- time loop ----
     n_frames = int(np.ceil(duration / dt)) + 1
@@ -175,37 +170,42 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         P_sst = _target_psd_from_params(p_sst, k_rad, theta)
         P_ssh = _target_psd_from_params(p_ssh, k_rad, theta)
 
-        sigma_sst = np.sqrt((1 - phi**2) * P_sst)
-        sigma_ssh = np.sqrt((1 - phi**2) * P_ssh)
+        sigma_sst_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_sst[half_indices], 0.0))
+        sigma_ssh_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_ssh[half_indices], 0.0))
 
-        # generate noise only on the active half
-        noise_sst_full = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-        noise_ssh_full = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-        common_noise_full = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        # coupled noise on half‑plane
+        w_common_half = (rng.normal(size=(ny, nx))[half_indices] +
+                         1j * rng.normal(size=(ny, nx))[half_indices]) / np.sqrt(2)
+        w_sst_ind_half = (rng.normal(size=(ny, nx))[half_indices] +
+                          1j * rng.normal(size=(ny, nx))[half_indices]) / np.sqrt(2)
+        w_ssh_ind_half = (rng.normal(size=(ny, nx))[half_indices] +
+                          1j * rng.normal(size=(ny, nx))[half_indices]) / np.sqrt(2)
 
-        noise_sst = rho * common_noise_full + np.sqrt(1 - rho**2) * noise_sst_full
-        noise_ssh = rho * common_noise_full + np.sqrt(1 - rho**2) * noise_ssh_full
+        w_sst_half = rho * w_common_half + np.sqrt(1 - rho**2) * w_sst_ind_half
+        w_ssh_half = rho * w_common_half + np.sqrt(1 - rho**2) * w_ssh_ind_half
 
-        # update only the active half
-        a_sst_half = phi[half_indices] * a_sst[half_indices] + sigma_sst[half_indices] * noise_sst[half_indices]
-        a_ssh_half = phi[half_indices] * a_ssh[half_indices] + sigma_ssh[half_indices] * noise_ssh[half_indices]
+        # AR(2) update
+        a_new_sst = (2.0 * p_exp[half_indices] * a1_sst
+                     - p2[half_indices] * a2_sst
+                     + sigma_sst_half * w_sst_half)
+        a_new_ssh = (2.0 * p_exp[half_indices] * a1_ssh
+                     - p2[half_indices] * a2_ssh
+                     + sigma_ssh_half * w_ssh_half)
 
-        a_sst[half_indices] = a_sst_half
-        a_ssh[half_indices] = a_ssh_half
+        a2_sst, a1_sst = a1_sst, a_new_sst
+        a2_ssh, a1_ssh = a1_ssh, a_new_ssh
 
-        # enforce conjugate symmetry
-        a_sst[conj_indices] = np.conj(a_sst[half_indices])
-        a_ssh[conj_indices] = np.conj(a_ssh[half_indices])
+        # full Hermitian arrays
+        a_full_sst = _fill_full(a1_sst)
+        a_full_ssh = _fill_full(a1_ssh)
 
-        # spatial fields (raw, no per‑frame normalization)
-        sst = np.real(np.fft.ifft2(a_sst))
-        ssh = np.real(np.fft.ifft2(a_ssh))
+        sst = np.real(np.fft.ifft2(a_full_sst))
+        ssh = np.real(np.fft.ifft2(a_full_ssh))
 
         sst_ts[idx] = sst
         ssh_ts[idx] = ssh
 
     # ── Global normalization (all frames together) ────────────────
-    # SST → normalise to [0,1]
     sst_min_all = sst_ts.min()
     sst_max_all = sst_ts.max()
     if sst_max_all > sst_min_all:
@@ -213,7 +213,6 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
     else:
         sst_ts[:] = 0.5
 
-    # SSH → normalise to [0,1] then map to ±0.05 m
     ssh_min_all = ssh_ts.min()
     ssh_max_all = ssh_ts.max()
     if ssh_max_all > ssh_min_all:
@@ -222,7 +221,6 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         ssh_norm = np.full_like(ssh_ts, 0.5)
     ssh_ts = (ssh_norm - 0.5) * 0.1
 
-    # save if requested
     if save_path is not None:
         np.savez(save_path, t=t_out, sst=sst_ts, ssh=ssh_ts,
                  tau0=tau0, tau_alpha=tau_alpha, rho=rho, script=script)

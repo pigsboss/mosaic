@@ -817,25 +817,35 @@ def generate_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
                 P += gauss * direction
         return P
 
-    # ── initialise Fourier coefficients from the target spectrum at t=0 ──
+    # ── AR(2) coefficient arrays ────────────────────────────────────────
+    p_exp = np.exp(-dt / tau_k)          # pole per wavenumber
+    p2 = p_exp ** 2
+    # noise amplitude ensuring steady‑state variance = target P(k)
+    sigma_ar2_full = np.sqrt(np.maximum(1e-30, (1 - p2) ** 3 / (1 + p2)))
+
+    # ── helper: create a full Hermitian field from half‑plane data ──
+    def _fill_full(half_data):
+        full = np.zeros((ny, nx), dtype=complex)
+        full[half_indices] = half_data
+        full[conj_indices] = np.conj(half_data)
+        return full
+
+    # ── initialise past states with independent draws (fast burn‑in) ──
     params_sst0 = _blended_params(0.0, 'sst')
     params_ssh0 = _blended_params(0.0, 'ssh')
     P_sst0 = _target_psd(params_sst0)
     P_ssh0 = _target_psd(params_ssh0)
 
-    # initialize only active half
-    noise_init_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-    a_sst = np.zeros((ny, nx), dtype=complex)
-    a_sst[half_indices] = np.sqrt(P_sst0[half_indices]) * noise_init_sst[half_indices]
-    a_sst[conj_indices] = np.conj(a_sst[half_indices])
+    # generate two independent realisations -> a2, a1 (half‑plane only)
+    noise1_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    noise2_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a2_sst = np.sqrt(P_sst0[half_indices]) * noise1_sst[half_indices]
+    a1_sst = np.sqrt(P_sst0[half_indices]) * noise2_sst[half_indices]
 
-    noise_init_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-    a_ssh = np.zeros((ny, nx), dtype=complex)
-    a_ssh[half_indices] = np.sqrt(P_ssh0[half_indices]) * noise_init_ssh[half_indices]
-    a_ssh[conj_indices] = np.conj(a_ssh[half_indices])
-
-    # ── pre‑compute phi(k) ───────────────────────────────────────────────
-    phi = np.exp(-dt / tau_k)
+    noise1_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    noise2_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+    a2_ssh = np.sqrt(P_ssh0[half_indices]) * noise1_ssh[half_indices]
+    a1_ssh = np.sqrt(P_ssh0[half_indices]) * noise2_ssh[half_indices]
 
     # ── time loop ────────────────────────────────────────────────────────
     n_frames = int(np.ceil(duration / dt)) + 1
@@ -847,34 +857,39 @@ def generate_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         if t > duration:
             t = duration
 
-        # blended parameters at this time
         p_sst = _blended_params(t, 'sst')
         p_ssh = _blended_params(t, 'ssh')
-
         P_sst = _target_psd(p_sst)
         P_ssh = _target_psd(p_ssh)
 
-        sigma_sst = np.sqrt((1 - phi**2) * P_sst)
-        sigma_ssh = np.sqrt((1 - phi**2) * P_ssh)
+        # -- noise on half‑plane --
+        w_sst_half = (rng.normal(size=(ny, nx))[half_indices] +
+                      1j * rng.normal(size=(ny, nx))[half_indices]) / np.sqrt(2)
+        w_ssh_half = (rng.normal(size=(ny, nx))[half_indices] +
+                      1j * rng.normal(size=(ny, nx))[half_indices]) / np.sqrt(2)
 
-        # noise only needed on active half
-        noise_full_sst = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
-        noise_full_ssh = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        # -- AR(2) update --
+        sigma_sst_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_sst[half_indices], 0.0))
+        sigma_ssh_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_ssh[half_indices], 0.0))
 
-        # update active half
-        a_sst_half = phi[half_indices] * a_sst[half_indices] + sigma_sst[half_indices] * noise_full_sst[half_indices]
-        a_ssh_half = phi[half_indices] * a_ssh[half_indices] + sigma_ssh[half_indices] * noise_full_ssh[half_indices]
+        a_new_sst = (2.0 * p_exp[half_indices] * a1_sst
+                     - p2[half_indices] * a2_sst
+                     + sigma_sst_half * w_sst_half)
+        a_new_ssh = (2.0 * p_exp[half_indices] * a1_ssh
+                     - p2[half_indices] * a2_ssh
+                     + sigma_ssh_half * w_ssh_half)
 
-        a_sst[half_indices] = a_sst_half
-        a_ssh[half_indices] = a_ssh_half
+        # shift memory
+        a2_sst, a1_sst = a1_sst, a_new_sst
+        a2_ssh, a1_ssh = a1_ssh, a_new_ssh
 
-        # enforce conjugate symmetry
-        a_sst[conj_indices] = np.conj(a_sst[half_indices])
-        a_ssh[conj_indices] = np.conj(a_ssh[half_indices])
+        # build full Hermitian fields
+        a_full_sst = _fill_full(a1_sst)
+        a_full_ssh = _fill_full(a1_ssh)
 
-        # reconstruct spatial fields (raw, no per‑frame normalization)
-        sst = np.real(ifft2(a_sst))
-        ssh = np.real(ifft2(a_ssh))
+        # reconstruct spatial fields (raw)
+        sst = np.real(ifft2(a_full_sst))
+        ssh = np.real(ifft2(a_full_ssh))
 
         sst_ts[idx] = sst
         ssh_ts[idx] = ssh
