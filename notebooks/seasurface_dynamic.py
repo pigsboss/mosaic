@@ -42,19 +42,22 @@ from seasurface import state_params
 for state in state_params:
     if state == 'calm':
         state_params[state]['velocity'] = {
-            'alpha': 3.5, 's': 0.2, 'theta0': 0.0,
+            'alpha': 4.0,   # was 3.5 → smoother
+            's': 0.2, 'theta0': 0.0,
             'isotropic_component': 0.9, 'peaks': None,
             'tau0': 7200.0, 'tau_alpha': 0.5
         }
     elif state == 'langmuir':
         state_params[state]['velocity'] = {
-            'alpha': 3.0, 's': 2.0, 'theta0': 0.0,
+            'alpha': 3.5,   # was 3.0 → smoother
+            's': 2.0, 'theta0': 0.0,
             'isotropic_component': 0.2, 'peaks': None,
             'tau0': 3600.0, 'tau_alpha': 0.5
         }
     elif state == 'turbulent':
         state_params[state]['velocity'] = {
-            'alpha': 3.0, 's': 0.3, 'theta0': 0.0,
+            'alpha': 4.0,   # was 3.0 → smoother
+            's': 0.3, 'theta0': 0.0,
             'isotropic_component': 0.7, 'peaks': None,
             'tau0': 900.0, 'tau_alpha': 0.8
         }
@@ -286,8 +289,11 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         P_sst = _target_psd_from_params(p_sst, k_rad, theta)
         P_ssh = _target_psd_from_params(p_ssh, k_rad, theta)
 
-        sigma_sst_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_sst[half_indices], 0.0))
-        sigma_ssh_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_ssh[half_indices], 0.0))
+        # innovation factor to reduce random fluctuations when advection is active
+        innov_factor = 0.3 if advection else 1.0
+
+        sigma_sst_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_sst[half_indices], 0.0)) * innov_factor
+        sigma_ssh_half = sigma_ar2_full[half_indices] * np.sqrt(np.maximum(P_ssh[half_indices], 0.0)) * innov_factor
 
         # coupled noise on half‑plane
         w_common_half = (rng.normal(size=(ny, nx))[half_indices] +
@@ -355,12 +361,17 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         sst = np.real(np.fft.ifft2(a_full_sst))
         ssh = np.real(np.fft.ifft2(a_full_ssh))
 
-        # ---------- 平流 (advection) ----------
+        # ---------- 平流 (advection) with sub‑stepping ----------
         if advection:
-            sst_raw = advect_semilag(sst, u, v, dx_m, dy_m, dt)
-            ssh_raw = advect_semilag(ssh, u, v, dx_m, dy_m, dt)
-            sst_ts[idx] = sst_raw
-            ssh_ts[idx] = ssh_raw
+            n_sub = 3
+            dt_sub = dt / n_sub
+            sst_sub = sst
+            ssh_sub = ssh
+            for _ in range(n_sub):
+                sst_sub = advect_semilag(sst_sub, u, v, dx_m, dy_m, dt_sub)
+                ssh_sub = advect_semilag(ssh_sub, u, v, dx_m, dy_m, dt_sub)
+            sst_ts[idx] = sst_sub
+            ssh_ts[idx] = ssh_sub
         else:
             sst_ts[idx] = sst
             ssh_ts[idx] = ssh
