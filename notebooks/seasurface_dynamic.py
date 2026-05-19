@@ -12,6 +12,10 @@ Advection feature (semi‑Lagrangian):
   - Velocity field generated from a streamfunction with the same stochastic model.
   - Fields are advected forward each time step.
 
+For Langmuir circulation a mean east‑west shear profile is superimposed
+on the stochastic velocity field, producing the characteristic streak
+drifting and rolling.
+
 Requirements:
   - numpy, matplotlib (for animation), scipy (for advection), seasurface (for state_params).
 """
@@ -151,6 +155,7 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         If provided, the arrays are saved as ``<save_path>.npz``.
     advection : bool
         If True, advect the fields using a stochastically generated velocity field.
+        When Langmuir circulation is active, a mean east‑west shear is added.
 
     Returns
     -------
@@ -218,6 +223,14 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         params_a = state_params[state_a][field_type]
         params_b = state_params[state_b][field_type]
         return interpolate_state_params(params_a, params_b, frac)
+
+    # ── helper: return the state name active at time t (for shear logic) ──
+    def _current_state(t):
+        n_seg = len(script) - 1
+        i = 0
+        while i < n_seg and t >= script[i+1][0]:
+            i += 1
+        return script[i][1]
 
     # ---- initialise past states from target spectrum at t=0 ----
     params_sst0 = _blended_params(0.0, 'sst')
@@ -325,6 +338,14 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
             dy_m = ly * 1000.0 / ny
             u = (np.roll(psi, -1, axis=0) - np.roll(psi, 1, axis=0)) / (2 * dy_m)
             v = -(np.roll(psi, -1, axis=1) - np.roll(psi, 1, axis=1)) / (2 * dx_m)
+
+            # ── Add mean east‑west shear for Langmuir circulation ──
+            if _current_state(t) == 'langmuir':
+                U0 = 0.1   # m/s, maximum shear velocity
+                # y coordinates in metres (domain height ly in km)
+                y_m = np.linspace(0, ly * 1000.0, ny)
+                shear_profile = U0 * np.sin(np.pi * y_m / (ly * 1000.0))
+                u += shear_profile[:, np.newaxis]   # broadcast to (ny, nx)
         # ----------------------------------------------------------------
 
         # full Hermitian arrays
