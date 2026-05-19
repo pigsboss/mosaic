@@ -650,8 +650,9 @@ def interpolate_state_params(state_a, state_b, fraction):
     Parameters
     ----------
     state_a, state_b : dict
-        Dictionaries containing 'alpha', 's', 'isotropic_component',
-        'theta0' and optionally 'peaks' (list of (k_center, width, amplitude)).
+        Dictionaries containing numeric scalar keys (e.g., 'alpha', 's',
+        'isotropic_component', 'theta0', 'tau0', 'tau_alpha') and
+        optionally 'peaks'.
     fraction : float
         Blending factor in [0, 1].  0 = pure state_a, 1 = pure state_b.
 
@@ -660,9 +661,10 @@ def interpolate_state_params(state_a, state_b, fraction):
     blended : dict
     """
     out = {}
-    scalars = ['alpha', 's', 'isotropic_component', 'theta0']
-    for key in scalars:
-        out[key] = (1 - fraction) * state_a[key] + fraction * state_b[key]
+    # Automatically interpolate all common numeric keys (scalars)
+    for key in state_a:
+        if key in state_b and key != 'peaks':
+            out[key] = (1 - fraction) * state_a[key] + fraction * state_b[key]
 
     peaks_a = state_a.get('peaks')
     peaks_b = state_b.get('peaks')
