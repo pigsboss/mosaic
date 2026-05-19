@@ -601,8 +601,8 @@ def time_averaged_radial_psd(frames, dx, dy):
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
-    duration = 60   # 2 hours
-    dt = 1           # timestep (seconds)
+    duration = 10   # 2 hours
+    dt = 0.1           # timestep (seconds)
     nx, ny = 256, 256
     lx, ly = 1.0, 1.0   # km
     tau0 = 3600.0        # decorrelation time at largest scale
