@@ -617,7 +617,7 @@ if __name__ == "__main__":
     nx, ny = 256, 256
     lx, ly = 1.0, 1.0   # km
     tau0 = 3600.0        # decorrelation time at largest scale
-    tau_alpha = 0.3
+    tau_alpha = 0.4
 
     states = ['calm', 'langmuir', 'turbulent']
     titles = {'calm': 'Calm', 'langmuir': 'Langmuir', 'turbulent': 'Turbulent'}
