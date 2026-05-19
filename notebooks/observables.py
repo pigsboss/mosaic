@@ -30,7 +30,9 @@ from apertures import D_FULL, D_GOLAY, SUBSIZE, WAVELENGTH, GEO_HEIGHT, _GOLAY9_
 # ----------------------------------------------------------------------
 
 def radial_power_spectrum(field, dx, dy, mask=None):
-    """Compute 2D radial average power spectrum within the mask region."""
+    """Compute 2D radial average power spectrum within the mask region.
+    Returns masked arrays: bins with no data are masked out.
+    """
     ny, nx = field.shape
     F = np.fft.fft2(field)
     psd2d = np.abs(F) ** 2
@@ -66,12 +68,14 @@ def radial_power_spectrum(field, dx, dy, mask=None):
             radial_psd[bin_idx] += psd2d_shifted[i, j]
             counts[bin_idx] += 1
 
-    # 平均；无数据的 bin 保持 0
+    # 平均；无数据的 bin 保持 0（但会被掩膜覆盖）
     nonzero = counts > 0
     radial_psd[nonzero] /= counts[nonzero]
 
     k_center = 0.5 * (bins[1:] + bins[:-1])
-    return k_center, radial_psd
+    # 掩盖没有样本的 bin，避免绘图时显示为 0
+    radial_psd_masked = np.ma.array(radial_psd, mask=(counts == 0))
+    return k_center, radial_psd_masked
 
 
 # ----------------------------------------------------------------------
@@ -79,7 +83,9 @@ def radial_power_spectrum(field, dx, dy, mask=None):
 # ----------------------------------------------------------------------
 
 def moment_anisotropy(field, dx, dy, n_bins=50, mask=None):
-    """Compute spectral moment tensor per radial bin with optional mask."""
+    """Compute spectral moment tensor per radial bin with optional mask.
+    Returns masked arrays for A and theta: bins with no data are masked.
+    """
     ny, nx = field.shape
     F = np.fft.fft2(field)
     psd2d = np.abs(F) ** 2
@@ -98,21 +104,20 @@ def moment_anisotropy(field, dx, dy, n_bins=50, mask=None):
 
     A = np.zeros(n_bins)
     theta = np.zeros(n_bins)
+    has_data = np.zeros(n_bins, dtype=bool)
 
     for i in range(n_bins):
         mask_bin = (k_rad >= bins[i]) & (k_rad < bins[i+1])
         if not np.any(mask_bin):
-            A[i] = 0.0
-            theta[i] = 0.0
-            continue
+            continue      # A[i], theta[i] already 0, has_data False
         p_vals = psd2d[mask_bin]
         kx_vals = KX[mask_bin]
         ky_vals = KY[mask_bin]
         total = np.sum(p_vals)
         if total == 0:
-            A[i] = 0.0
-            theta[i] = 0.0
-            continue
+            continue      # no power in this bin
+        has_data[i] = True
+
         m20 = np.sum(p_vals * kx_vals ** 2) / total
         m11 = np.sum(p_vals * kx_vals * ky_vals) / total
         m02 = np.sum(p_vals * ky_vals ** 2) / total
@@ -134,7 +139,10 @@ def moment_anisotropy(field, dx, dy, n_bins=50, mask=None):
         else:
             theta[i] = 0.5 * np.arctan2(2 * m11, m20 - m02)
 
-    return k_centers, A, theta
+    # 掩盖无数据的 bin
+    A_masked = np.ma.array(A, mask=~has_data)
+    theta_masked = np.ma.array(theta, mask=~has_data)
+    return k_centers, A_masked, theta_masked
 
 
 # ----------------------------------------------------------------------
