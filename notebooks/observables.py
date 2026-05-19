@@ -342,7 +342,7 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SST Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14, y=0.94)
+                 fontweight='bold', fontsize=14, y=0.935)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_sst, dpi=200, bbox_inches='tight')
     if show:
@@ -382,7 +382,7 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SSH Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14, y=0.94)
+                 fontweight='bold', fontsize=14, y=0.935)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_ssh, dpi=200, bbox_inches='tight')
     if show:
@@ -478,7 +478,7 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
                     y_obs = psd_obs / psd_obs[0] * shift_map[name]
                 elif variable == 'anisotropy':
                     k_obs, A_obs, _ = moment_anisotropy(obs_field, dx, dy, mask=mask)
-                    y_obs = A_obs / A_obs[0] * shift_map[name]
+                    y_obs = A_obs * shift_map[name]
                 else:  # orientation
                     k_obs, _, theta_obs = moment_anisotropy(obs_field, dx, dy, mask=mask)
                     y_obs = np.degrees(theta_obs) + angle_map[name]
