@@ -8,8 +8,12 @@ Based on Proposal 0001:
   - Ornstein‑Uhlenbeck process in Fourier space with wavenumber‑dependent memory.
   - Coupling via a common stochastic driver (coherence ρ).
 
+Advection feature (semi‑Lagrangian):
+  - Velocity field generated from a streamfunction with the same stochastic model.
+  - Fields are advected forward each time step.
+
 Requirements:
-  - numpy, matplotlib (for animation), seasurface (for state_params).
+  - numpy, matplotlib (for animation), scipy (for advection), seasurface (for state_params).
 """
 
 import numpy as np
@@ -17,10 +21,63 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from importlib import reload
 import sys
+
+try:
+    from scipy.ndimage import map_coordinates
+except ImportError:
+    map_coordinates = None
+
 sys.path.insert(0, '.')   # ensure local imports work
 import seasurface
 reload(seasurface)
 from seasurface import state_params
+
+# ----------------------------------------------------------------------
+# Append velocity parameters to state_params for advection
+# ----------------------------------------------------------------------
+for state in state_params:
+    if state == 'calm':
+        state_params[state]['velocity'] = {
+            'alpha': 3.5, 's': 0.2, 'theta0': 0.0,
+            'isotropic_component': 0.9, 'peaks': None,
+            'tau0': 7200.0, 'tau_alpha': 0.5
+        }
+    elif state == 'langmuir':
+        state_params[state]['velocity'] = {
+            'alpha': 3.0, 's': 2.0, 'theta0': 0.0,
+            'isotropic_component': 0.2, 'peaks': None,
+            'tau0': 3600.0, 'tau_alpha': 0.5
+        }
+    elif state == 'turbulent':
+        state_params[state]['velocity'] = {
+            'alpha': 3.0, 's': 0.3, 'theta0': 0.0,
+            'isotropic_component': 0.7, 'peaks': None,
+            'tau0': 900.0, 'tau_alpha': 0.8
+        }
+
+# ----------------------------------------------------------------------
+# Semi‑Lagrangian advection
+# ----------------------------------------------------------------------
+
+def advect_semilag(field, u, v, dx, dy, dt):
+    """
+    Semi‑Lagrangian advection of a 2D periodic field.
+    field : 2D ndarray (ny, nx)
+    u, v  : velocity components on the same grid (m/s)
+    dx, dy: grid spacing in meters
+    dt    : time step in seconds
+    Returns the advected field.
+    """
+    if map_coordinates is None:
+        raise ImportError("scipy.ndimage is required for advection. Install scipy.")
+    ny, nx = field.shape
+    y, x = np.mgrid[0:ny, 0:nx]
+    # Departure point in index space (periodic)
+    x_dep = (x - u * dt / dx) % nx
+    y_dep = (y - v * dt / dy) % ny
+    coords = np.stack([y_dep.ravel(), x_dep.ravel()])
+    interpolated = map_coordinates(field, coords, order=3, mode='wrap')
+    return interpolated.reshape(ny, nx)
 
 # ----------------------------------------------------------------------
 # Internal helper: build target 2D PSD from a parameter dict
@@ -61,7 +118,8 @@ interpolate_state_params = seasurface.interpolate_state_params
 def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
                                 tau0=5.0, tau_alpha=1.0,
                                 rho=0.0,
-                                save_path=None):
+                                save_path=None,
+                                advection=False):
     """
     Generate a continuous time series of SST and SSH fields with an
     Ornstein‑Uhlenbeck process in Fourier space.  A common stochastic
@@ -91,6 +149,8 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         ρ=0 → independent fields; ρ=1 → perfectly synchronised random forcing.
     save_path : str or None
         If provided, the arrays are saved as ``<save_path>.npz``.
+    advection : bool
+        If True, advect the fields using a stochastically generated velocity field.
 
     Returns
     -------
@@ -175,6 +235,31 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
     a2_ssh = np.sqrt(P_ssh0[half_indices]) * noise1_ssh[half_indices]
     a1_ssh = np.sqrt(P_ssh0[half_indices]) * noise2_ssh[half_indices]
 
+    # ----------  velocity AR(2) state (if advection) ----------
+    if advection:
+        # blending helper for velocity
+        def _blended_vel_params(t):
+            n_seg = len(script) - 1
+            i = 0
+            while i < n_seg and t >= script[i+1][0]:
+                i += 1
+            t_start, state_a = script[i]
+            t_end = script[i+1][0] if i < n_seg else t_start
+            state_b = script[i+1][1] if i < n_seg else state_a
+            frac = max(0.0, min(1.0, (t - t_start) / (t_end - t_start))) if t_end > t_start else 0.0
+            params_a = state_params[state_a]['velocity']
+            params_b = state_params[state_b]['velocity']
+            return interpolate_state_params(params_a, params_b, frac)
+
+        # initialize velocity AR(2) state at t=0
+        vel_params0 = _blended_vel_params(0.0)
+        P_vel0 = _target_psd_from_params(vel_params0, k_rad, theta)
+        noise1_v = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        noise2_v = (rng.normal(size=(ny, nx)) + 1j * rng.normal(size=(ny, nx))) / np.sqrt(2)
+        a2_vel = np.sqrt(P_vel0[half_indices]) * noise1_v[half_indices]
+        a1_vel = np.sqrt(P_vel0[half_indices]) * noise2_v[half_indices]
+    # ----------------------------------------------------------------
+
     # ---- time loop ----
     n_frames = int(np.ceil(duration / dt)) + 1
     t_out = np.linspace(0, duration, n_frames)
@@ -213,6 +298,35 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         a2_sst, a1_sst = a1_sst, a_new_sst
         a2_ssh, a1_ssh = a1_ssh, a_new_ssh
 
+        # ---------- 更新速度场并得到 u, v ----------
+        if advection:
+            vp = _blended_vel_params(t)
+            P_vel = _target_psd_from_params(vp, k_rad, theta)
+            # recompute tau and AR(2) coefficients for velocity
+            tau_k_vel = vp['tau0'] * (k_min / (k_rad + 1e-12)) ** vp['tau_alpha']
+            tau_k_vel[0, 0] = vp['tau0']
+            p_vel = np.exp(-dt / tau_k_vel)
+            p2_vel = p_vel**2
+            sigma_vel_full = np.sqrt(np.maximum(1e-30, (1 - p2_vel)**3 / (1 + p2_vel)))
+            sigma_vel_half = sigma_vel_full[half_indices] * np.sqrt(np.maximum(P_vel[half_indices], 0.0))
+            w_vel_half = (rng.normal(size=(ny, nx))[half_indices] +
+                          1j * rng.normal(size=(ny, nx))[half_indices]) / np.sqrt(2)
+            a_new_vel = (2.0 * p_vel[half_indices] * a1_vel -
+                         p2_vel[half_indices] * a2_vel +
+                         sigma_vel_half * w_vel_half)
+            a2_vel, a1_vel = a1_vel, a_new_vel
+            # Build full streamfunction
+            psi_full = np.zeros((ny, nx), dtype=complex)
+            psi_full[half_indices] = a1_vel
+            psi_full[conj_indices] = np.conj(a1_vel)
+            psi = np.real(np.fft.ifft2(psi_full))
+            # velocity components via centered differences (m/s)
+            dx_m = lx * 1000.0 / nx   # metres
+            dy_m = ly * 1000.0 / ny
+            u = (np.roll(psi, -1, axis=0) - np.roll(psi, 1, axis=0)) / (2 * dy_m)
+            v = -(np.roll(psi, -1, axis=1) - np.roll(psi, 1, axis=1)) / (2 * dx_m)
+        # ----------------------------------------------------------------
+
         # full Hermitian arrays
         a_full_sst = _fill_full(a1_sst)
         a_full_ssh = _fill_full(a1_ssh)
@@ -220,8 +334,15 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         sst = np.real(np.fft.ifft2(a_full_sst))
         ssh = np.real(np.fft.ifft2(a_full_ssh))
 
-        sst_ts[idx] = sst
-        ssh_ts[idx] = ssh
+        # ---------- 平流 (advection) ----------
+        if advection:
+            sst_raw = advect_semilag(sst, u, v, dx_m, dy_m, dt)
+            ssh_raw = advect_semilag(ssh, u, v, dx_m, dy_m, dt)
+            sst_ts[idx] = sst_raw
+            ssh_ts[idx] = ssh_raw
+        else:
+            sst_ts[idx] = sst
+            ssh_ts[idx] = ssh
 
     # ── Global normalization (all frames together) ────────────────
     sst_min_all = sst_ts.min()
@@ -251,7 +372,8 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
 # ----------------------------------------------------------------------
 def generate_state_sequence(state, duration, dt,
                             nx=256, ny=256, lx=1.0, ly=1.0,
-                            tau0=600.0, tau_alpha=0.8, seed=42, rho=0.0):
+                            tau0=600.0, tau_alpha=0.8, seed=42, rho=0.0,
+                            advection=False):
     """
     Generate SST and SSH time series for a fixed sea state (no transition).
     Thin wrapper around generate_coupled_timeseries with a single‑state script.
@@ -276,6 +398,8 @@ def generate_state_sequence(state, duration, dt,
         Random seed.
     rho : float
         SST‑SSH coherence (0 = independent).
+    advection : bool
+        If True, advect the fields.
 
     Returns
     -------
@@ -286,7 +410,8 @@ def generate_state_sequence(state, duration, dt,
     t, sst_ts, ssh_ts = generate_coupled_timeseries(
         duration=duration, dt=dt, nx=nx, ny=ny, lx=lx, ly=ly,
         script=[(0, state)],
-        tau0=tau0, tau_alpha=tau_alpha, rho=rho, seed=seed
+        tau0=tau0, tau_alpha=tau_alpha, rho=rho, seed=seed,
+        advection=advection
     )
     return t, sst_ts, ssh_ts
 
@@ -450,7 +575,7 @@ def time_averaged_radial_psd(frames, dx, dy):
 
 
 # =============================================================================
-# Main – demo (updated: three separate state sequences)
+# Main – demo (updated: three separate state sequences with advection)
 # =============================================================================
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
@@ -466,11 +591,12 @@ if __name__ == "__main__":
     titles = {'calm': 'Calm', 'langmuir': 'Langmuir', 'turbulent': 'Turbulent'}
 
     for state in states:
-        print(f"Generating {state} time series...")
+        print(f"Generating {state} time series (advection ON)...")
         t, sst_ts, ssh_ts = generate_state_sequence(
             state, duration, dt,
             nx=nx, ny=ny, lx=lx, ly=ly,
-            tau0=tau0, tau_alpha=tau_alpha, rho=0.0, seed=42
+            tau0=tau0, tau_alpha=tau_alpha, rho=0.0, seed=42,
+            advection=True
         )
 
         # Animation
