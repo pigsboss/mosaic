@@ -24,42 +24,116 @@ import seasurface, apertures
 reload(apertures)
 reload(seasurface)
 from apertures import D_FULL, D_GOLAY, SUBSIZE, WAVELENGTH, GEO_HEIGHT, _GOLAY9_REL
-from seasurface import moment_anisotropy
 
 # ----------------------------------------------------------------------
-# Radial power spectrum (copied from seasurface.py to avoid import issues)
+# Radial power spectrum (with optional mask)
 # ----------------------------------------------------------------------
 
-def radial_power_spectrum(field, dx, dy):
-    """Compute 2D radial average power spectrum of a 2D field."""
+def radial_power_spectrum(field, dx, dy, mask=None):
+    """Compute 2D radial average power spectrum within the mask region."""
     ny, nx = field.shape
     F = np.fft.fft2(field)
     psd2d = np.abs(F) ** 2
-    psd2d_shifted = np.fft.fftshift(psd2d)
 
+    if mask is not None:
+        # 只保留掩膜内的功率
+        psd2d = np.where(mask, psd2d, 0.0)
+
+    psd2d_shifted = np.fft.fftshift(psd2d)
     kx = np.fft.fftshift(np.fft.fftfreq(nx, d=dx))
     ky = np.fft.fftshift(np.fft.fftfreq(ny, d=dy))
     KX, KY = np.meshgrid(kx, ky)
     k_rad = np.sqrt(KX ** 2 + KY ** 2)
 
-    k_max = np.max(k_rad)
+    # 如果有掩膜，只统计掩膜内像素（避免稀释平均）
+    if mask is not None:
+        mask_shifted = np.fft.fftshift(mask)
+        valid = mask_shifted
+    else:
+        valid = np.ones_like(k_rad, dtype=bool)
+
+    k_max = np.max(k_rad[valid])
     n_bins = 100
     bins = np.linspace(0, k_max, n_bins + 1)
     radial_psd = np.zeros(n_bins)
     counts = np.zeros(n_bins)
 
-    for i in range(ny):
-        for j in range(nx):
-            kr = k_rad[i, j]
-            bin_idx = np.digitize(kr, bins) - 1
-            if 0 <= bin_idx < n_bins:
-                radial_psd[bin_idx] += psd2d_shifted[i, j]
-                counts[bin_idx] += 1
+    # 只遍历有效像素
+    idx, idy = np.where(valid)
+    for i, j in zip(idx, idy):
+        kr = k_rad[i, j]
+        bin_idx = np.digitize(kr, bins) - 1
+        if 0 <= bin_idx < n_bins:
+            radial_psd[bin_idx] += psd2d_shifted[i, j]
+            counts[bin_idx] += 1
 
-    valid = counts > 0
-    radial_psd[valid] /= counts[valid]
+    valid_bins = counts > 0
+    radial_psd[valid_bins] /= counts[valid_bins]
     k_center = 0.5 * (bins[1:] + bins[:-1])
-    return k_center[valid], radial_psd[valid]
+    return k_center[valid_bins], radial_psd[valid_bins]
+
+
+# ----------------------------------------------------------------------
+# Local moment_anisotropy (with optional mask)
+# ----------------------------------------------------------------------
+
+def moment_anisotropy(field, dx, dy, n_bins=50, mask=None):
+    """Compute spectral moment tensor per radial bin with optional mask."""
+    ny, nx = field.shape
+    F = np.fft.fft2(field)
+    psd2d = np.abs(F) ** 2
+
+    kx = np.fft.fftfreq(nx, d=dx)
+    ky = np.fft.fftfreq(ny, d=dy)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX ** 2 + KY ** 2)
+
+    if mask is not None:
+        psd2d = np.where(mask, psd2d, 0.0)
+
+    k_max = np.max(k_rad)
+    bins = np.linspace(0, k_max, n_bins + 1)
+    k_centers = 0.5 * (bins[1:] + bins[:-1])
+
+    A = np.zeros(n_bins)
+    theta = np.zeros(n_bins)
+
+    for i in range(n_bins):
+        mask_bin = (k_rad >= bins[i]) & (k_rad < bins[i+1])
+        if not np.any(mask_bin):
+            A[i] = 0.0
+            theta[i] = 0.0
+            continue
+        p_vals = psd2d[mask_bin]
+        kx_vals = KX[mask_bin]
+        ky_vals = KY[mask_bin]
+        total = np.sum(p_vals)
+        if total == 0:
+            A[i] = 0.0
+            theta[i] = 0.0
+            continue
+        m20 = np.sum(p_vals * kx_vals ** 2) / total
+        m11 = np.sum(p_vals * kx_vals * ky_vals) / total
+        m02 = np.sum(p_vals * ky_vals ** 2) / total
+
+        trace = m20 + m02
+        det = m20 * m02 - m11 * m11
+        disc = np.sqrt(trace ** 2 - 4 * det)
+        lambda1 = 0.5 * (trace + disc)
+        lambda2 = 0.5 * (trace - disc)
+
+        if lambda1 + lambda2 > 0:
+            A[i] = (lambda1 - lambda2) / (lambda1 + lambda2)
+        else:
+            A[i] = 0.0
+
+        # principal direction
+        if (m20 - m02) == 0 and m11 == 0:
+            theta[i] = 0.0
+        else:
+            theta[i] = 0.5 * np.arctan2(2 * m11, m20 - m02)
+
+    return k_centers, A, theta
 
 
 # ----------------------------------------------------------------------
@@ -90,6 +164,8 @@ def compute_otf_for_aperture(aperture_type, shape, dx_m, dy_m, H_m, wavelength_m
     otf : 2D complex ndarray (ny, nx)
         OTF normalised so that the zero‑frequency value is 1.
         The array is in the order expected by np.fft.fft2 (DC at (0,0)).
+    mask : 2D bool ndarray (ny, nx)
+        True where |OTF| > 0.01 (relative threshold).
     """
     ny, nx = shape
     # spatial frequencies (cycles/metre)
@@ -145,9 +221,11 @@ def compute_otf_for_aperture(aperture_type, shape, dx_m, dy_m, H_m, wavelength_m
     # autocorrelation via FFT: OTF = ifft(|fft(CTF)|^2)
     ctf_ft = np.fft.fft2(ctf)
     otf = np.fft.ifft2(np.abs(ctf_ft) ** 2).real
-    otf /= otf.max()   # zero‑frequency value = 1
+    otf /= otf.max()
 
-    return otf
+    # 生成掩膜（OTF 幅度大于阈值的位置）
+    mask = np.abs(otf) > 0.01
+    return otf, mask
 
 
 # ----------------------------------------------------------------------
@@ -177,6 +255,7 @@ def generate_observed(sst, ssh, lx_km, ly_km, noise_level=1e-5):
         keys 'Full', 'Golay3', 'Golay9', each containing:
           'sst_obs' : 2D ndarray
           'ssh_obs' : 2D ndarray
+          'otf_mask': 2D bool ndarray (mask of support)
     """
     ny, nx = sst.shape
     dx_m = (lx_km * 1000.0) / nx
@@ -191,8 +270,8 @@ def generate_observed(sst, ssh, lx_km, ly_km, noise_level=1e-5):
     for name in aperture_types:
         # nominal type for the helper (lowercase)
         type_code = name.lower()
-        otf = compute_otf_for_aperture(type_code, (ny, nx),
-                                       dx_m, dy_m, H_m, wavelength_m)
+        otf, mask = compute_otf_for_aperture(type_code, (ny, nx),
+                                             dx_m, dy_m, H_m, wavelength_m)
 
         # SST
         F_sst = np.fft.fft2(sst)
@@ -212,7 +291,8 @@ def generate_observed(sst, ssh, lx_km, ly_km, noise_level=1e-5):
         sst_obs = np.clip(sst_obs, sst.min(), sst.max())
         ssh_obs = np.clip(ssh_obs, ssh.min(), ssh.max())
 
-        results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs}
+        results[name] = {'sst_obs': sst_obs, 'ssh_obs': ssh_obs,
+                         'otf_mask': mask}
 
     return results
 
@@ -340,6 +420,23 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
     dx = lx_km / nx
     dy = ly_km / ny
 
+    # Compute common maximum wavenumber across all aperture masks
+    k_maxes = []
+    # use temporary frequency arrays
+    kx_temp = np.fft.fftfreq(nx, d=dx)
+    ky_temp = np.fft.fftfreq(ny, d=dy)
+    KX_temp, KY_temp = np.meshgrid(kx_temp, ky_temp)
+    k_rad_temp = np.sqrt(KX_temp**2 + KY_temp**2)
+    for state in states:
+        for name in apertures:
+            m = obs_data[state][name]['otf_mask']
+            # only consider positive wavenumbers inside mask
+            valid = m & (k_rad_temp > 0)
+            if np.any(valid):
+                km = np.max(k_rad_temp[valid])
+                k_maxes.append(km)
+    k_max_common = max(k_maxes) if k_maxes else 1.0
+
     fig, axes = plt.subplots(3, 2, figsize=(16, 15))
 
     def plot_panel(ax, variable, field_type, log_x=False):
@@ -373,15 +470,16 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
             # ---- observed fields (with shift for radial power) ----
             for name in apertures:
                 obs_field = obs_data[state][name][f'{field_type}_obs']
+                mask = obs_data[state][name]['otf_mask']
 
                 if variable == 'radial':
-                    k_obs, psd_obs = radial_power_spectrum(obs_field, dx, dy)
-                    y_obs = psd_obs / psd_obs[0] * shift_map[name]   # <-- offset
+                    k_obs, psd_obs = radial_power_spectrum(obs_field, dx, dy, mask=mask)
+                    y_obs = psd_obs / psd_obs[0] * shift_map[name]
                 elif variable == 'anisotropy':
-                    k_obs, A_obs, _ = moment_anisotropy(obs_field, dx, dy)
+                    k_obs, A_obs, _ = moment_anisotropy(obs_field, dx, dy, mask=mask)
                     y_obs = A_obs
                 else:  # orientation
-                    k_obs, _, theta_obs = moment_anisotropy(obs_field, dx, dy)
+                    k_obs, _, theta_obs = moment_anisotropy(obs_field, dx, dy, mask=mask)
                     y_obs = np.degrees(theta_obs)
 
                 if log_x:
@@ -403,6 +501,7 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
             ax.set_xscale('log')
             ax.set_ylabel('Orientation (deg)')
         ax.set_xlabel('Wavenumber (cyc/km)')
+        ax.set_xlim(right=k_max_common)
         ax.grid(True, which='both', linestyle='--', alpha=0.5)
 
     # ---- row 0: radial power ----
