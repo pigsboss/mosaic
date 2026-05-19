@@ -74,3 +74,9 @@ We start with Step 1 + Step 2 (single field, no coupling) because it deliver
 ### Implementation plan (pseudocode)
 
 #### 1. Parameter interpolation utility
+A function `interpolate_state_params(state_a, state_b, fraction)` blends
+two parameter dictionaries (each containing scalar keys like `alpha`, `s`,
+`isotropic_component`, `theta0`, and an optional `peaks` list). Scalars are
+linearly interpolated; peaks are faded in/out by adjusting amplitudes while
+keeping positions and widths constant.
+
