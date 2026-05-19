@@ -341,7 +341,7 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SST Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14, y=0.98)
+                 fontweight='bold', fontsize=14, y=0.9)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_sst, dpi=200, bbox_inches='tight')
     if show:
@@ -381,7 +381,7 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SSH Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14, y=0.98)
+                 fontweight='bold', fontsize=14, y=0.9)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_ssh, dpi=200, bbox_inches='tight')
     if show:
@@ -412,7 +412,7 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
 
     # vertical shift factors to separate observed spectra from true ones
     # (radial power only; anisotropy / orientation are kept at original scale)
-    shift_map = {'Full': 2.0, 'Golay3': 4.0, 'Golay9': 8.0}
+    shift_map = {'Full': 4.0, 'Golay3': 16.0, 'Golay9': 64.0}
 
     # get grid spacing from first true SST (all fields share the same shape)
     sample_sst = true_data[states[0]][0]
