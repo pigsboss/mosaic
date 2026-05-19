@@ -170,28 +170,30 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
         a_sst = phi * a_sst + sigma_sst * noise_sst
         a_ssh = phi * a_ssh + sigma_ssh * noise_ssh
 
-        # spatial fields
+        # spatial fields (raw, no per‑frame normalization)
         sst = np.real(np.fft.ifft2(a_sst))
         ssh = np.real(np.fft.ifft2(a_ssh))
 
-        # normalize to [0,1]
-        sst_min, sst_max = sst.min(), sst.max()
-        if sst_max > sst_min:
-            sst = (sst - sst_min) / (sst_max - sst_min)
-        else:
-            sst[:] = 0.5
-
-        ssh_min, ssh_max = ssh.min(), ssh.max()
-        if ssh_max > ssh_min:
-            ssh = (ssh - ssh_min) / (ssh_max - ssh_min)
-        else:
-            ssh[:] = 0.5
-
-        # SSH scaling as in seasurface.generate_state_sst_ssh
-        ssh = (ssh - 0.5) * 0.1
-
         sst_ts[idx] = sst
         ssh_ts[idx] = ssh
+
+    # ── Global normalization (all frames together) ────────────────
+    # SST → normalise to [0,1]
+    sst_min_all = sst_ts.min()
+    sst_max_all = sst_ts.max()
+    if sst_max_all > sst_min_all:
+        sst_ts = (sst_ts - sst_min_all) / (sst_max_all - sst_min_all)
+    else:
+        sst_ts[:] = 0.5
+
+    # SSH → normalise to [0,1] then map to ±0.05 m
+    ssh_min_all = ssh_ts.min()
+    ssh_max_all = ssh_ts.max()
+    if ssh_max_all > ssh_min_all:
+        ssh_norm = (ssh_ts - ssh_min_all) / (ssh_max_all - ssh_min_all)
+    else:
+        ssh_norm = np.full_like(ssh_ts, 0.5)
+    ssh_ts = (ssh_norm - 0.5) * 0.1
 
     # save if requested
     if save_path is not None:
