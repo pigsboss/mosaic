@@ -1,6 +1,6 @@
 # ADR-0002: Spectral Moment Tensor for Multi‑Scale Analysis of SST and SSH Fields
 
-Date: 2025-03-23
+Date: 2026-05-20
 
 ## Status
 

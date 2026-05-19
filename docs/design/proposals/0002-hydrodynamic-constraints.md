@@ -1,6 +1,6 @@
 # Proposal 0002: Hydrodynamic Constraints for Realistic Time Evolution
 
-Date: 2025-03-25
+Date: 2026-05-20
 
 ## Status
 

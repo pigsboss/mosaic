@@ -1,6 +1,6 @@
 # Proposal 0001: Dynamic Sea Surface Time Series Generation
 
-Date: 2025-03-23
+Date: 2026-05-20
 
 ## Status
 

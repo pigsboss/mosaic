@@ -1,6 +1,6 @@
 # ADR-0001: Handling of Power Spectra and Masking for Aperture Observations
 
-Date: 2025-03-23
+Date: 2026-05-20
 
 ## Status
 

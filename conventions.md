@@ -17,6 +17,12 @@ a common understanding between the human designer(s) and the AI assistant(s).
   a document are misinterpreted as executable commands, polluting the conversation
   context.
 
+## Date handling
+
+- When writing or editing a Markdown file that includes a date, the AI **must** ask
+  the human for the actual current date (e.g., "今天是哪一天？") before finalising the document.
+  The AI must never fabricate a date based on training data.
+
 ## Session startup
 
 - At the beginning of every session, the AI shall confirm that it has read
