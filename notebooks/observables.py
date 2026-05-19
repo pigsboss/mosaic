@@ -342,7 +342,7 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SST Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14, y=0.9)
+                 fontweight='bold', fontsize=14, y=0.94)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_sst, dpi=200, bbox_inches='tight')
     if show:
@@ -382,7 +382,7 @@ def plot_all_states_observations(true_data, obs_data,
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle('SSH Observations: Three States × Four Apertures',
-                 fontweight='bold', fontsize=14, y=0.9)
+                 fontweight='bold', fontsize=14, y=0.94)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_ssh, dpi=200, bbox_inches='tight')
     if show:
@@ -412,8 +412,8 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
     state_color = {'calm': 'blue', 'langmuir': 'green', 'turbulent': 'red'}
 
     # vertical shift factors to separate observed spectra from true ones
-    # (radial power only; anisotropy / orientation are kept at original scale)
-    shift_map = {'Full': 4.0, 'Golay3': 16.0, 'Golay9': 64.0}
+    shift_map = {'Full': 10.0, 'Golay3': 100.0, 'Golay9': 1000.0}
+    angle_map = {'Full': 360., 'Golay3': 720., 'Golay9': 1080.}
 
     # get grid spacing from first true SST (all fields share the same shape)
     sample_sst = true_data[states[0]][0]
@@ -478,10 +478,10 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
                     y_obs = psd_obs / psd_obs[0] * shift_map[name]
                 elif variable == 'anisotropy':
                     k_obs, A_obs, _ = moment_anisotropy(obs_field, dx, dy, mask=mask)
-                    y_obs = A_obs
+                    y_obs = A_obs / A_obs[0] * shift_map[name]
                 else:  # orientation
                     k_obs, _, theta_obs = moment_anisotropy(obs_field, dx, dy, mask=mask)
-                    y_obs = np.degrees(theta_obs)
+                    y_obs = np.degrees(theta_obs) + angle_map[name]
 
                 if log_x:
                     ax.semilogx(k_obs, y_obs, color=color, linestyle=ls_map[name],
@@ -518,9 +518,9 @@ def plot_all_states_spectral_comparison(true_data, obs_data,
     axes[1, 1].set_title('Anisotropy Degree – SSH')
 
     # ---- row 2: orientation ----
-    plot_panel(axes[2, 0], 'orientation', 'sst')
+    plot_panel(axes[2, 0], 'orientation', 'sst', True)
     axes[2, 0].set_title('Principal Orientation – SST')
-    plot_panel(axes[2, 1], 'orientation', 'ssh')
+    plot_panel(axes[2, 1], 'orientation', 'ssh', True)
     axes[2, 1].set_title('Principal Orientation – SSH')
 
     # ---- unified legend ----
