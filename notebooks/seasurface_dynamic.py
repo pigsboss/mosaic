@@ -204,6 +204,51 @@ def generate_coupled_timeseries(duration, dt, nx, ny, lx, ly, script, seed=42,
 
 
 # ----------------------------------------------------------------------
+# NEW: generate_state_sequence (single‑state wrapper)
+# ----------------------------------------------------------------------
+def generate_state_sequence(state, duration, dt,
+                            nx=256, ny=256, lx=1.0, ly=1.0,
+                            tau0=600.0, tau_alpha=0.8, seed=42, rho=0.0):
+    """
+    Generate SST and SSH time series for a fixed sea state (no transition).
+    Thin wrapper around generate_coupled_timeseries with a single‑state script.
+
+    Parameters
+    ----------
+    state : str
+        'calm', 'langmuir' or 'turbulent'.
+    duration : float
+        Total simulation time in seconds.
+    dt : float
+        Time step in seconds.
+    nx, ny : int
+        Grid size (default 256).
+    lx, ly : float
+        Domain size in km.
+    tau0 : float
+        Decorrelation time (seconds) at the smallest wavenumber.
+    tau_alpha : float
+        Exponent for τ(k) = τ₀ · (k_min/k)^α.
+    seed : int
+        Random seed.
+    rho : float
+        SST‑SSH coherence (0 = independent).
+
+    Returns
+    -------
+    t : ndarray (n_frames,)
+    sst_ts : ndarray (n_frames, ny, nx)
+    ssh_ts : ndarray (n_frames, ny, nx)
+    """
+    t, sst_ts, ssh_ts = generate_coupled_timeseries(
+        duration=duration, dt=dt, nx=nx, ny=ny, lx=lx, ly=ly,
+        script=[(0, state)],
+        tau0=tau0, tau_alpha=tau_alpha, rho=rho, seed=seed
+    )
+    return t, sst_ts, ssh_ts
+
+
+# ----------------------------------------------------------------------
 # Jupyter animation utilities
 # ----------------------------------------------------------------------
 def animate_fields(t, sst_ts, ssh_ts, lx=1.0, ly=1.0, interval=100, as_html5=True):
@@ -309,43 +354,123 @@ def plot_spectral_evolution(t, sst_ts, ssh_ts, lx=1.0, ly=1.0,
     return fig
 
 
+# ----------------------------------------------------------------------
+# NEW: time_averaged_radial_psd
+# ----------------------------------------------------------------------
+def time_averaged_radial_psd(frames, dx, dy):
+    """
+    Compute time‑averaged radial power spectrum.
+    For each frame, compute |FFT|² ; average over time; then radial binning.
+
+    Parameters
+    ----------
+    frames : ndarray (n_frames, ny, nx)
+    dx, dy : float
+        Grid spacing (same unit as wavenumber).
+
+    Returns
+    -------
+    k_center : 1D array
+    radial_psd : 1D array
+    """
+    n_frames, ny, nx = frames.shape
+    psd2d_sum = np.zeros((ny, nx), dtype=np.float64)
+    for i in range(n_frames):
+        F = np.fft.fft2(frames[i])
+        psd2d_sum += np.abs(F) ** 2
+    psd2d_avg = psd2d_sum / n_frames
+
+    # radial binning (as in seasurface.radial_power_spectrum without mask)
+    kx = np.fft.fftshift(np.fft.fftfreq(nx, d=dx))
+    ky = np.fft.fftshift(np.fft.fftfreq(ny, d=dy))
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX ** 2 + KY ** 2)
+
+    k_max = np.max(k_rad)
+    n_bins = 100
+    bins = np.linspace(0, k_max, n_bins + 1)
+    radial_psd = np.zeros(n_bins)
+    counts = np.zeros(n_bins)
+
+    psd_shifted = np.fft.fftshift(psd2d_avg)
+    for i in range(ny):
+        for j in range(nx):
+            kr = k_rad[i, j]
+            idx = np.digitize(kr, bins) - 1
+            if 0 <= idx < n_bins:
+                radial_psd[idx] += psd_shifted[i, j]
+                counts[idx] += 1
+    valid = counts > 0
+    radial_psd[valid] /= counts[valid]
+    k_center = 0.5 * (bins[1:] + bins[:-1])
+    return k_center[valid], radial_psd[valid]
+
+
 # =============================================================================
-# Main – demo
+# Main – demo (updated: three separate state sequences)
 # =============================================================================
 if __name__ == "__main__":
-    # Quick demonstration: generate a 2‑hour cycle calm→langmuir→turbulent→calm
-    script_demo = [
-        (0,       'calm'),
-        (1800,    'langmuir'),
-        (3600,    'turbulent'),
-        (5400,    'calm'),
-        (7200,    'calm'),        # stay calm until end
-    ]
+    import matplotlib.pyplot as plt
+
     duration = 7200   # 2 hours
-    dt = 60           # time step (seconds)
+    dt = 60           # timestep (seconds)
     nx, ny = 256, 256
-    lx = 1.0          # km
-    ly = 1.0
+    lx, ly = 1.0, 1.0   # km
+    tau0 = 600.0        # decorrelation time at largest scale
+    tau_alpha = 0.8
 
-    print("Generating coupled SST/SSH time series (ρ=0.3)...")
-    t, sst, ssh = generate_coupled_timeseries(
-        duration, dt, nx, ny, lx, ly, script_demo,
-        tau0=600.0, tau_alpha=0.8, rho=0.3,
-        save_path="dynamic_cycle.npz"
-    )
-    print(f"Saved dynamic_cycle.npz with shape {sst.shape}")
+    states = ['calm', 'langmuir', 'turbulent']
+    titles = {'calm': 'Calm', 'langmuir': 'Langmuir', 'turbulent': 'Turbulent'}
 
-    # produce an HTML5 animation (if running in a Jupyter notebook, you can display it)
-    try:
-        video = animate_fields(t, sst, ssh, lx=lx, ly=ly, interval=80, as_html5=True)
-        with open("dynamic_cycle.html", "w") as f:
-            f.write(f"<html><body>{video}</body></html>")
-        print("Animation saved as dynamic_cycle.html (open in browser).")
-    except (ImportError, RuntimeError) as e:
-        print("Could not create HTML5 animation (maybe no ffmpeg):", e)
+    for state in states:
+        print(f"Generating {state} time series...")
+        t, sst_ts, ssh_ts = generate_state_sequence(
+            state, duration, dt,
+            nx=nx, ny=ny, lx=lx, ly=ly,
+            tau0=tau0, tau_alpha=tau_alpha, rho=0.0, seed=42
+        )
 
-    # show a few spectral snapshots
-    fig = plot_spectral_evolution(t, sst, ssh, lx=lx, ly=ly, n_snapshots=5)
-    fig.savefig("dynamic_spectra_evolution.png", dpi=150)
-    print("Saved dynamic_spectra_evolution.png")
-    plt.show()
+        # Animation
+        try:
+            video = animate_fields(t, sst_ts, ssh_ts, lx=lx, ly=ly, interval=80, as_html5=True)
+            fname = f"animation_{state}.html"
+            with open(fname, 'w') as f:
+                f.write(f"<html><body>{video}</body></html>")
+            print(f"  Saved {fname}")
+        except Exception as e:
+            print(f"  Animation skipped: {e}")
+
+        # Time‑averaged vs single‑frame power spectra
+        dx = lx / nx
+        dy = ly / ny
+
+        k_sst1, psd_sst1 = seasurface.radial_power_spectrum(sst_ts[0], dx, dy)
+        k_ssh1, psd_ssh1 = seasurface.radial_power_spectrum(ssh_ts[0], dx, dy)
+
+        k_sst_avg, psd_sst_avg = time_averaged_radial_psd(sst_ts, dx, dy)
+        k_ssh_avg, psd_ssh_avg = time_averaged_radial_psd(ssh_ts, dx, dy)
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        axes[0].loglog(k_sst1, psd_sst1/psd_sst1[0], 'k--', alpha=0.5, label='single frame')
+        axes[0].loglog(k_sst_avg, psd_sst_avg/psd_sst_avg[0], 'r-', label='time averaged')
+        axes[0].set_title(f'SST – {titles[state]}')
+        axes[0].set_xlabel('Wavenumber (cyc/km)')
+        axes[0].set_ylabel('Normalized Power')
+        axes[0].legend(); axes[0].grid(True, which='both', linestyle='--', alpha=0.5)
+
+        axes[1].loglog(k_ssh1, psd_ssh1/psd_ssh1[0], 'k--', alpha=0.5, label='single frame')
+        axes[1].loglog(k_ssh_avg, psd_ssh_avg/psd_ssh_avg[0], 'b-', label='time averaged')
+        axes[1].set_title(f'SSH – {titles[state]}')
+        axes[1].set_xlabel('Wavenumber (cyc/km)')
+        axes[1].set_ylabel('Normalized Power')
+        axes[1].legend(); axes[1].grid(True, which='both', linestyle='--', alpha=0.5)
+
+        fig.suptitle(f'Time‑averaged vs Instantaneous Spectra ({titles[state]})', fontweight='bold')
+        fig.tight_layout()
+        fname = f"spectra_avg_{state}.png"
+        fig.savefig(fname, dpi=150)
+        print(f"  Saved {fname}")
+        plt.close(fig)
+
+    print("All state sequences processed.")
