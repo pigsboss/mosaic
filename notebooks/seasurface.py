@@ -667,31 +667,42 @@ def interpolate_state_params(state_a, state_b, fraction):
     peaks_a = state_a.get('peaks')
     peaks_b = state_b.get('peaks')
 
-    # resolve None -> empty list
+    # Both None: no peaks
     if peaks_a is None and peaks_b is None:
         out['peaks'] = None
         return out
 
+    # Exactly one is None: fade in/out using the non‑None side as template
     if peaks_a is None:
-        peaks_a = []
-    if peaks_b is None:
-        peaks_b = []
+        # fade in: amplitude grows from 0 to full at fraction=1
+        template = peaks_b
+        amp_factor = fraction
+    elif peaks_b is None:
+        # fade out: amplitude decreases from full to 0 at fraction=1
+        template = peaks_a
+        amp_factor = 1 - fraction
+    else:
+        # Both provide peaks – require matching lengths and interpolate normally
+        if len(peaks_a) != len(peaks_b):
+            raise ValueError(
+                f"Number of peaks must match between states for interpolation: "
+                f"{len(peaks_a)} vs {len(peaks_b)}"
+            )
+        out_peaks = []
+        for (k0_a, w_a, amp_a), (k0_b, w_b, amp_b) in zip(peaks_a, peaks_b):
+            k0 = (1 - fraction) * k0_a + fraction * k0_b
+            w  = (1 - fraction) * w_a + fraction * w_b
+            amp = (1 - fraction) * amp_a + fraction * amp_b
+            out_peaks.append([k0, w, amp])
+        out['peaks'] = out_peaks
+        return out
 
-    # we assume the peaks lists correspond (same length, same ordering)
-    if len(peaks_a) != len(peaks_b):
-        raise ValueError(
-            f"Number of peaks must match between states for interpolation: "
-            f"{len(peaks_a)} vs {len(peaks_b)}"
-        )
-
+    # Build result from template with scaled amplitude
     out_peaks = []
-    for (k0_a, w_a, amp_a), (k0_b, w_b, amp_b) in zip(peaks_a, peaks_b):
-        k0 = (1 - fraction) * k0_a + fraction * k0_b
-        w  = (1 - fraction) * w_a + fraction * w_b
-        amp = (1 - fraction) * amp_a + fraction * amp_b
-        out_peaks.append([k0, w, amp])
-
-    out['peaks'] = out_peaks
+    if template is not None:
+        for (k0, w, amp) in template:
+            out_peaks.append([k0, w, amp * amp_factor])
+    out['peaks'] = out_peaks if out_peaks else None
     return out
 
 
