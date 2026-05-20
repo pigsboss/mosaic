@@ -713,6 +713,9 @@ if __name__ == "__main__":
     spectra_parser.add_argument('--save_fig', default=None, help='Save figure to this path (e.g. spectra.png)')
     spectra_parser.add_argument('--save_data', default=None, help='Save computed spectra as .npz with this prefix')
 
+    # ----- help subcommand -----
+    help_parser = subparsers.add_parser('help', help='Print usage information')
+
     args = parser.parse_args()
 
     if args.command == 'fields':
@@ -774,3 +777,10 @@ if __name__ == "__main__":
                      k_iso=k_iso, power_iso=power_iso,
                      k_mom=k_mom, m20=m20, m11=m11, m02=m02)
             print(f"Saved data: {args.save_data}.npz")
+
+    elif args.command == 'help':
+        parser.print_help()
+        print("\nExamples:")
+        print("  python seasurface_dynamic.py fields --state all --duration 3600 --save mydata")
+        print("  python seasurface_dynamic.py fields --state calm --advection --save calm_ts")
+        print("  python seasurface_dynamic.py spectra --load timeseries_calm_sst.npy --lx 1.0 --save_fig calm_spectra.png")
