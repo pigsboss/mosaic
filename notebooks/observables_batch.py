@@ -7,6 +7,9 @@
 用法：
   python observables_batch.py --load timeseries_calm_sst.npy --aperture full
                               --lx 1.0 --ly 1.0 --output calm_sst_full
+  python observables_batch.py --load timeseries_calm_sst.npy --aperture full
+                              --lx 1.0 --ly 1.0 --output calm_sst_full
+                              --reference timeseries_calm_sst.npy  # true field
 """
 
 import argparse
@@ -427,14 +430,18 @@ def compute_anisotropy_and_orientation(k_mom, m20, m11, m02):
 
 
 # =====================================================================
-# UPDATED plot_spectra with error bars for A and theta
+# UPDATED plot_spectra with error bars for A and theta, optional reference
 # =====================================================================
 def plot_spectra(k_iso, power_iso, std_power_iso,
                  k_mom, m20, std_m20, m11, std_m11, m02, std_m02,
-                 A, theta_deg, std_A=None, std_theta=None, save_fig=None):
+                 A, theta_deg, std_A=None, std_theta=None, save_fig=None,
+                 ref_data=None):
     """
     4‑面板图：径向功率谱、矩张量、各向异性度、主导方向。
     在径向功率谱、矩张量分量、各向异性度及主导方向上添加误差棒 (1σ)。
+
+    若提供 ref_data 字典（包含 reference 字段的统计量），则叠加绘制
+    参考（未滤波）曲线，使用红色虚线以清晰区分。
     """
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     ((ax_iso, ax_mom), (ax_aniso, ax_orient)) = axes
@@ -450,23 +457,42 @@ def plot_spectra(k_iso, power_iso, std_power_iso,
     yerr = np.where(std_power_iso.mask, 0.0, std_power_iso / ref)
 
     ax_iso.errorbar(k_iso, norm_power, yerr=yerr, fmt='k-',
-                    ecolor='gray', capsize=2)
+                    ecolor='gray', capsize=2, label='Observed')
+    if ref_data is not None:
+        ref_power = ref_data['power_iso'] / ref
+        ref_yerr = np.where(ref_data['std_power'].mask, 0.0, ref_data['std_power'] / ref)
+        ax_iso.errorbar(ref_data['k_iso'], ref_power, yerr=ref_yerr, fmt='r--',
+                        ecolor='lightcoral', capsize=2, label='Reference')
+
     ax_iso.set_title('Time‑averaged radial power (+ std)')
     ax_iso.set_xlabel('Wavenumber (cyc/km)')
     ax_iso.set_ylabel('Normalized Power')
     ax_iso.grid(True, which='both', linestyle='--', alpha=0.5)
     ax_iso.set_xscale('log')
     ax_iso.set_yscale('log')
+    ax_iso.legend()
 
     # ---- 谱矩张量 ----
-    for (m, std, label) in [(m20, std_m20, 'm20'),
-                             (m11, std_m11, 'm11'),
-                             (m02, std_m02, 'm02')]:
+    for (m, std, label, ref_m, ref_std) in [
+        (m20, std_m20, 'm20',
+         ref_data['m20'] if ref_data else None,
+         ref_data['std_m20'] if ref_data else None),
+        (m11, std_m11, 'm11',
+         ref_data['m11'] if ref_data else None,
+         ref_data['std_m11'] if ref_data else None),
+        (m02, std_m02, 'm02',
+         ref_data['m02'] if ref_data else None,
+         ref_data['std_m02'] if ref_data else None)]:
         # 转换为普通数组并处理掩蔽
         x = k_mom
         y = m
         err = np.where(std.mask, 0.0, std)
         ax_mom.errorbar(x, y, yerr=err, label=label, capsize=2)
+        if ref_m is not None:
+            ref_err = np.where(ref_std.mask, 0.0, ref_std)
+            ax_mom.errorbar(x, ref_m, yerr=ref_err, fmt='--',
+                            color=ax_mom.lines[-1].get_color(),
+                            capsize=2, alpha=0.7)
     ax_mom.set_title('Spectral moment tensor components')
     ax_mom.set_xlabel('Wavenumber (cyc/km)')
     ax_mom.set_ylabel('Moment')
@@ -479,26 +505,42 @@ def plot_spectra(k_iso, power_iso, std_power_iso,
         # 转换 masked arrays 为普通数组
         yerr_A = np.where(std_A.mask, 0.0, std_A)
         ax_aniso.errorbar(k_mom, A, yerr=yerr_A, fmt='ko', ecolor='gray',
-                          capsize=2)
+                          capsize=2, label='Observed')
+        if ref_data is not None:
+            ref_yerr_A = np.where(ref_data['std_A'].mask, 0.0, ref_data['std_A'])
+            ax_aniso.errorbar(k_mom, ref_data['A'], yerr=ref_yerr_A,
+                              fmt='rs', ecolor='lightcoral', capsize=2,
+                              label='Reference')
     else:
-        ax_aniso.semilogx(k_mom, A, 'k-')
+        ax_aniso.semilogx(k_mom, A, 'k-', label='Observed')
+        if ref_data is not None:
+            ax_aniso.semilogx(k_mom, ref_data['A'], 'r--', label='Reference')
     ax_aniso.set_title('Anisotropy A = (λ₁−λ₂)/(λ₁+λ₂)')
     ax_aniso.set_xlabel('Wavenumber (cyc/km)')
     ax_aniso.set_ylabel('A')
     ax_aniso.set_ylim(-0.05, 1.05)
     ax_aniso.grid(True, which='both', linestyle='--', alpha=0.5)
+    ax_aniso.legend()
 
     # ---- 主导方向（带误差棒）----
     if std_theta is not None:
         yerr_theta = np.where(std_theta.mask, 0.0, std_theta)
         ax_orient.errorbar(k_mom, theta_deg, yerr=yerr_theta, fmt='ko',
-                           ecolor='gray', capsize=2)
+                           ecolor='gray', capsize=2, label='Observed')
+        if ref_data is not None:
+            ref_yerr_theta = np.where(ref_data['std_theta_deg'].mask, 0.0, ref_data['std_theta_deg'])
+            ax_orient.errorbar(k_mom, ref_data['theta_deg'], yerr=ref_yerr_theta,
+                               fmt='rs', ecolor='lightcoral', capsize=2,
+                               label='Reference')
     else:
-        ax_orient.semilogx(k_mom, theta_deg, 'k-')
+        ax_orient.semilogx(k_mom, theta_deg, 'k-', label='Observed')
+        if ref_data is not None:
+            ax_orient.semilogx(k_mom, ref_data['theta_deg'], 'r--', label='Reference')
     ax_orient.set_title('Principal orientation θ(k)')
     ax_orient.set_xlabel('Wavenumber (cyc/km)')
     ax_orient.set_ylabel('θ (degrees)')
     ax_orient.grid(True, which='both', linestyle='--', alpha=0.5)
+    ax_orient.legend()
 
     fig.tight_layout()
     if save_fig:
@@ -509,7 +551,7 @@ def plot_spectra(k_iso, power_iso, std_power_iso,
 
 
 # =====================================================================
-# Main (modified)
+# Main (modified to include --reference)
 # =====================================================================
 def main():
     parser = argparse.ArgumentParser(
@@ -522,6 +564,10 @@ def main():
     parser.add_argument('--lx', type=float, default=1.0, help='Scene width in km (default: 1.0).')
     parser.add_argument('--ly', type=float, default=1.0, help='Scene height in km (default: 1.0).')
     parser.add_argument('--output', required=True, help='Base name for output files.')
+    parser.add_argument('--reference', required=False, default=None,
+                        help='Path to reference (true) .npy time series '
+                             '(same shape as input). If provided, its spectral '
+                             'curves are overplotted in red dashed style.')
     args = parser.parse_args()
 
     # 1. 加载原始时序
@@ -562,6 +608,51 @@ def main():
         obs_frames, dx, dy, mask)
     print("  Done.")
 
+    # ---- 5b. 如果提供了参考时间序列，计算相同的统计量 ----
+    ref_data = None
+    if args.reference is not None:
+        print(f"Loading reference time series from {args.reference}…")
+        ref_frames = load_time_series(args.reference)
+        assert ref_frames.shape == obs_frames.shape, \
+            f"Reference shape {ref_frames.shape} must match observed shape {obs_frames.shape}"
+        # 参考场使用全掩膜
+        full_mask = np.ones((ny, nx), dtype=bool)
+
+        print("  Computing reference radial power spectra…")
+        ref_k_iso, ref_mean_power, ref_std_power = radial_power_spectra_sequence(
+            ref_frames, dx, dy, full_mask)
+
+        print("  Computing reference moment tensors…")
+        (ref_k_mom,
+         ref_mean_m20, ref_std_m20,
+         ref_mean_m11, ref_std_m11,
+         ref_mean_m02, ref_std_m02) = moment_tensor_sequence(
+            ref_frames, dx, dy, full_mask)
+
+        print("  Computing reference anisotropy & orientation…")
+        (ref_k_aniso,
+         ref_mean_A, ref_std_A,
+         ref_mean_theta_deg, ref_std_theta_deg) = anisotropy_orientation_sequence(
+            ref_frames, dx, dy, full_mask)
+
+        ref_data = {
+            'k_iso': ref_k_iso,
+            'power_iso': ref_mean_power,
+            'std_power': ref_std_power,
+            'k_mom': ref_k_mom,
+            'm20': ref_mean_m20,
+            'std_m20': ref_std_m20,
+            'm11': ref_mean_m11,
+            'std_m11': ref_std_m11,
+            'm02': ref_mean_m02,
+            'std_m02': ref_std_m02,
+            'A': ref_mean_A,
+            'std_A': ref_std_A,
+            'theta_deg': ref_mean_theta_deg,
+            'std_theta_deg': ref_std_theta_deg,
+        }
+        print("  Reference statistics ready.")
+
     # 6. 保存数据（包括 A 和 θ 的标准差）
     data_file = f"{args.output}_spectra.npz"
     np.savez(data_file,
@@ -573,12 +664,13 @@ def main():
              theta_deg=mean_theta_deg, theta_deg_std=std_theta_deg)
     print(f"  Saved spectral data to {data_file}")
 
-    # 7. 绘图（带全部误差棒）
+    # 7. 绘图（带全部误差棒，若提供参考数据则叠加参考曲线）
     fig_file = f"{args.output}_spectra.png"
     plot_spectra(k_iso, mean_power, std_power,
                  k_mom, mean_m20, std_m20, mean_m11, std_m11, mean_m02, std_m02,
                  mean_A, mean_theta_deg,
-                 std_A=std_A, std_theta=std_theta_deg, save_fig=fig_file)
+                 std_A=std_A, std_theta=std_theta_deg, save_fig=fig_file,
+                 ref_data=ref_data)
     print("Processing complete.")
 
 
