@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from importlib import reload
 import sys
+import argparse
 
 try:
     from scipy.ndimage import map_coordinates
@@ -633,73 +634,143 @@ def time_averaged_radial_psd(frames, dx, dy):
     return k_center[valid], radial_psd[valid]
 
 
+# ----------------------------------------------------------------------
+# NEW: compute_time_averaged_moment_tensor
+# ----------------------------------------------------------------------
+def compute_time_averaged_moment_tensor(frames, dx, dy, n_bins=100):
+    """
+    Time‑averaged 2D power spectrum → spectral moment tensor per radial bin.
+    Returns k_centers, m20, m11, m02 arrays.
+    """
+    n_frames, ny, nx = frames.shape
+    psd2d_sum = np.zeros((ny, nx), dtype=np.float64)
+    for i in range(n_frames):
+        F = np.fft.fft2(frames[i])
+        psd2d_sum += np.abs(F) ** 2
+    psd2d_avg = psd2d_sum / n_frames
+
+    kx = np.fft.fftfreq(nx, d=dx)
+    ky = np.fft.fftfreq(ny, d=dy)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX ** 2 + KY ** 2)
+
+    k_max = np.max(k_rad)
+    bins = np.linspace(0, k_max, n_bins + 1)
+    k_centers = 0.5 * (bins[1:] + bins[:-1])
+
+    m20 = np.zeros(n_bins)
+    m11 = np.zeros(n_bins)
+    m02 = np.zeros(n_bins)
+
+    for i in range(n_bins):
+        mask = (k_rad >= bins[i]) & (k_rad < bins[i+1])
+        if not np.any(mask):
+            continue
+        p_vals = psd2d_avg[mask]
+        kx_vals = KX[mask]
+        ky_vals = KY[mask]
+        total = np.sum(p_vals)
+        if total == 0:
+            continue
+        m20[i] = np.sum(p_vals * kx_vals ** 2) / total
+        m11[i] = np.sum(p_vals * kx_vals * ky_vals) / total
+        m02[i] = np.sum(p_vals * ky_vals ** 2) / total
+
+    return k_centers, m20, m11, m02
+
+
 # =============================================================================
-# Main – demo (updated: three separate state sequences with advection)
+# Main – command line interface
 # =============================================================================
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt
+    parser = argparse.ArgumentParser(
+        description="Sea surface dynamic time series & spectral analysis"
+    )
+    subparsers = parser.add_subparsers(dest='command', required=True)
 
-    duration = 300   # 2 hours
-    dt = 1           # timestep (seconds)
-    nx, ny = 256, 256
-    lx, ly = 1.0, 1.0   # km
-    tau0 = 7200.0        # decorrelation time at largest scale
-    tau_alpha = 0.3
+    # ----- fields subcommand -----
+    fields_parser = subparsers.add_parser('fields', help='Generate time series and save as .npy')
+    fields_parser.add_argument('--state', choices=['calm','langmuir','turbulent','all'],
+                               default='all', help='Sea state (default: all)')
+    fields_parser.add_argument('--duration', type=float, default=300, help='Duration in seconds')
+    fields_parser.add_argument('--dt', type=float, default=1, help='Time step in seconds')
+    fields_parser.add_argument('--nx', type=int, default=256, help='Grid points in x')
+    fields_parser.add_argument('--ny', type=int, default=256, help='Grid points in y')
+    fields_parser.add_argument('--lx', type=float, default=1.0, help='Domain size x (km)')
+    fields_parser.add_argument('--ly', type=float, default=1.0, help='Domain size y (km)')
+    fields_parser.add_argument('--tau0', type=float, default=7200.0, help='Decorrelation time at largest scale')
+    fields_parser.add_argument('--tau_alpha', type=float, default=0.3, help='Exponent for tau scaling')
+    fields_parser.add_argument('--seed', type=int, default=42)
+    fields_parser.add_argument('--advection', action='store_true', default=True)
+    fields_parser.add_argument('--no-advection', dest='advection', action='store_false')
+    fields_parser.add_argument('--save', default='timeseries', help='Base name prefix for output .npy files')
 
-    states = ['calm', 'langmuir', 'turbulent']
-    titles = {'calm': 'Calm', 'langmuir': 'Langmuir', 'turbulent': 'Turbulent'}
+    # ----- spectra subcommand -----
+    spectra_parser = subparsers.add_parser('spectra', help='Load .npy and compute spectra')
+    spectra_parser.add_argument('--load', required=True, help='Path to .npy time series (3D array)')
+    spectra_parser.add_argument('--lx', type=float, default=1.0, help='Domain size x (km)')
+    spectra_parser.add_argument('--ly', type=float, default=1.0, help='Domain size y (km)')
+    spectra_parser.add_argument('--save_fig', default=None, help='Save figure to this path (e.g. spectra.png)')
+    spectra_parser.add_argument('--save_data', default=None, help='Save computed spectra as .npz with this prefix')
 
-    for state in states:
-        print(f"Generating {state} time series (advection ON)...")
-        t, sst_ts, ssh_ts = generate_state_sequence(
-            state, duration, dt,
-            nx=nx, ny=ny, lx=lx, ly=ly,
-            tau0=tau0, tau_alpha=tau_alpha, rho=0.0, seed=42,
-            advection=True
-        )
+    args = parser.parse_args()
 
-        # Animation – show and save HTML / GIF
-        try:
-            animate_fields(t, sst_ts, ssh_ts, lx=lx, ly=ly, interval=80,
-                           as_html5=False, show=True,
-                           save_html=f"animation_{state}.html",
-                           save_gif=f"animation_{state}.gif")
-            print(f"  Saved animation_{state}.html and animation_{state}.gif")
-        except Exception as e:
-            print(f"  Animation skipped: {e}")
+    if args.command == 'fields':
+        states_to_run = ['calm', 'langmuir', 'turbulent'] if args.state == 'all' else [args.state]
+        titles = {'calm': 'Calm', 'langmuir': 'Langmuir', 'turbulent': 'Turbulent'}
 
-        # Time‑averaged vs single‑frame power spectra
-        dx = lx / nx
-        dy = ly / ny
+        for state in states_to_run:
+            print(f"Generating {state} time series (advection={args.advection})...")
+            t, sst_ts, ssh_ts = generate_state_sequence(
+                state, args.duration, args.dt,
+                nx=args.nx, ny=args.ny, lx=args.lx, ly=args.ly,
+                tau0=args.tau0, tau_alpha=args.tau_alpha,
+                rho=0.0, seed=args.seed,
+                advection=args.advection
+            )
+            fname_sst = f"{args.save}_{state}_sst.npy"
+            fname_ssh = f"{args.save}_{state}_ssh.npy"
+            np.save(fname_sst, sst_ts)
+            np.save(fname_ssh, ssh_ts)
+            print(f"  Saved {fname_sst} and {fname_ssh}")
 
-        k_sst1, psd_sst1 = seasurface.radial_power_spectrum(sst_ts[0], dx, dy)
-        k_ssh1, psd_ssh1 = seasurface.radial_power_spectrum(ssh_ts[0], dx, dy)
+    elif args.command == 'spectra':
+        data = np.load(args.load)
+        if data.ndim != 3:
+            raise ValueError("Loaded data must be a 3D array (time, y, x)")
+        nx, ny = data.shape[2], data.shape[1]
+        dx = args.lx / nx
+        dy = args.ly / ny
 
-        k_sst_avg, psd_sst_avg = time_averaged_radial_psd(sst_ts, dx, dy)
-        k_ssh_avg, psd_ssh_avg = time_averaged_radial_psd(ssh_ts, dx, dy)
+        k_iso, power_iso = time_averaged_radial_psd(data, dx, dy)
+        k_mom, m20, m11, m02 = compute_time_averaged_moment_tensor(data, dx, dy)
 
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-        axes[0].loglog(k_sst1, psd_sst1/psd_sst1[0], 'k--', alpha=0.5, label='single frame')
-        axes[0].loglog(k_sst_avg, psd_sst_avg/psd_sst_avg[0], 'r-', label='time averaged')
-        axes[0].set_title(f'SST – {titles[state]}')
+        # Isotropic power
+        axes[0].loglog(k_iso, power_iso / power_iso[0], 'k-')
+        axes[0].set_title('Time‑averaged isotropic radial power')
         axes[0].set_xlabel('Wavenumber (cyc/km)')
         axes[0].set_ylabel('Normalized Power')
-        axes[0].legend(); axes[0].grid(True, which='both', linestyle='--', alpha=0.5)
+        axes[0].grid(True, which='both', linestyle='--', alpha=0.5)
 
-        axes[1].loglog(k_ssh1, psd_ssh1/psd_ssh1[0], 'k--', alpha=0.5, label='single frame')
-        axes[1].loglog(k_ssh_avg, psd_ssh_avg/psd_ssh_avg[0], 'b-', label='time averaged')
-        axes[1].set_title(f'SSH – {titles[state]}')
+        # Moment tensor components
+        axes[1].semilogx(k_mom, m20, label='m20')
+        axes[1].semilogx(k_mom, m11, label='m11')
+        axes[1].semilogx(k_mom, m02, label='m02')
+        axes[1].set_title('Spectral moment tensor components')
         axes[1].set_xlabel('Wavenumber (cyc/km)')
-        axes[1].set_ylabel('Normalized Power')
-        axes[1].legend(); axes[1].grid(True, which='both', linestyle='--', alpha=0.5)
+        axes[1].set_ylabel('Moment')
+        axes[1].legend()
+        axes[1].grid(True, which='both', linestyle='--', alpha=0.5)
 
-        fig.suptitle(f'Time‑averaged vs Instantaneous Spectra ({titles[state]})', fontweight='bold')
         fig.tight_layout()
-        fname = f"spectra_avg_{state}.png"
-        fig.savefig(fname, dpi=150)
-        plt.show()   # Display the figure interactively
-        plt.close(fig)
-        print(f"  Saved {fname}")
+        if args.save_fig:
+            fig.savefig(args.save_fig, dpi=150)
+            print(f"Saved figure: {args.save_fig}")
+        plt.show()
 
-    print("All state sequences processed.")
+        if args.save_data:
+            np.savez(f"{args.save_data}.npz",
+                     k_iso=k_iso, power_iso=power_iso,
+                     k_mom=k_mom, m20=m20, m11=m11, m02=m02)
+            print(f"Saved data: {args.save_data}.npz")
