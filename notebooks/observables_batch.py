@@ -129,49 +129,159 @@ def radial_power_spectrum_from_psd(psd2d, dx, dy, mask):
     return k_center, radial_psd_masked
 
 
-def moment_tensor_from_psd(psd2d, dx, dy, mask, n_bins=100):
+# =====================================================================
+# NEW: per‑frame radial power spectrum sequence (mean + std)
+# =====================================================================
+def radial_power_spectra_sequence(frames, dx, dy, mask, n_bins=100):
     """
-    从时间平均的 2D PSD 计算谱矩张量分量 m20, m11, m02（仅 mask 内有效）。
-    返回的 m20, m11, m02 均为 masked array，无数据的仓位被掩蔽。
+    逐帧计算径向功率谱，返回每个 radial bin 的平均功率和标准差。
+    frames : ndarray (n_frames, ny, nx)
+    dx, dy : 网格间距（与之前的定义一致）
+    mask   : 2D bool 掩膜（只在该区域内统计）
+    返回:
+      k_centers : 1D array
+      mean_power: masked array (n_bins,)
+      std_power : masked array (n_bins,)
     """
-    ny, nx = psd2d.shape
+    n_frames, ny, nx = frames.shape
     kx = np.fft.fftfreq(nx, d=dx)
     ky = np.fft.fftfreq(ny, d=dy)
     KX, KY = np.meshgrid(kx, ky)
     k_rad = np.sqrt(KX**2 + KY**2)
-
     k_max = np.max(k_rad)
     bins = np.linspace(0, k_max, n_bins + 1)
     k_centers = 0.5 * (bins[1:] + bins[:-1])
 
-    m20 = np.zeros(n_bins)
-    m11 = np.zeros(n_bins)
-    m02 = np.zeros(n_bins)
+    # 只考虑 mask 内且 k>0 的像素
+    valid_mask = mask & (k_rad > 0)
+    idx, idy = np.where(valid_mask)
+    kr_vals = k_rad[idx, idy]
+    bin_indices = np.digitize(kr_vals, bins) - 1
+    valid = (bin_indices >= 0) & (bin_indices < n_bins)
+    bin_indices = bin_indices[valid]
+    idx = idx[valid]
+    idy = idy[valid]
+
+    # 存储每帧每个 bin 的平均功率
+    per_frame_power = np.zeros((n_frames, n_bins))
+    for t in range(n_frames):
+        F = np.fft.fft2(frames[t])
+        psd2d = np.abs(F) ** 2
+        vals = psd2d[idx, idy]
+        # 对每个 bin 求平均（若没有像素则为 nan）
+        for b in range(n_bins):
+            mask_b = (bin_indices == b)
+            if np.any(mask_b):
+                per_frame_power[t, b] = np.mean(vals[mask_b])
+            else:
+                per_frame_power[t, b] = np.nan
+
+    # 计算均值和标准差
+    mean_power = np.zeros(n_bins)
+    std_power = np.zeros(n_bins)
     has_data = np.zeros(n_bins, dtype=bool)
+    for b in range(n_bins):
+        vals = per_frame_power[:, b]
+        if not np.all(np.isnan(vals)):
+            mean_power[b] = np.nanmean(vals)
+            std_power[b] = np.nanstd(vals)
+            has_data[b] = True
+        else:
+            mean_power[b] = 0.0
+            std_power[b] = 0.0
 
-    for i in range(n_bins):
-        mask_bin = (k_rad >= bins[i]) & (k_rad < bins[i+1])
-        mask_bin = mask_bin & mask  # 只考虑 mask 内
-        if not np.any(mask_bin):
-            continue
-        p_vals = psd2d[mask_bin]
-        kx_vals = KX[mask_bin]
-        ky_vals = KY[mask_bin]
-        total = np.sum(p_vals)
-        if total == 0:
-            continue
-        has_data[i] = True
-        m20[i] = np.sum(p_vals * kx_vals**2) / total
-        m11[i] = np.sum(p_vals * kx_vals * ky_vals) / total
-        m02[i] = np.sum(p_vals * ky_vals**2) / total
-
-    # 将没有数据的仓位屏蔽
-    m20_masked = np.ma.array(m20, mask=~has_data)
-    m11_masked = np.ma.array(m11, mask=~has_data)
-    m02_masked = np.ma.array(m02, mask=~has_data)
-    return k_centers, m20_masked, m11_masked, m02_masked
+    mean_masked = np.ma.array(mean_power, mask=~has_data)
+    std_masked = np.ma.array(std_power, mask=~has_data)
+    return k_centers, mean_masked, std_masked
 
 
+# =====================================================================
+# NEW: per‑frame moment tensor sequence (mean + std)
+# =====================================================================
+def moment_tensor_sequence(frames, dx, dy, mask, n_bins=100):
+    """
+    逐帧计算谱矩张量分量 (m20, m11, m02)，返回每个 radial bin 的均值和标准差。
+    参数含义同上。
+    返回:
+      k_centers,
+      mean_m20, std_m20,
+      mean_m11, std_m11,
+      mean_m02, std_m02
+      (均为 masked array)
+    """
+    n_frames, ny, nx = frames.shape
+    kx = np.fft.fftfreq(nx, d=dx)
+    ky = np.fft.fftfreq(ny, d=dy)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+    k_max = np.max(k_rad)
+    bins = np.linspace(0, k_max, n_bins + 1)
+    k_centers = 0.5 * (bins[1:] + bins[:-1])
+
+    valid_mask = mask & (k_rad > 0)
+    idx, idy = np.where(valid_mask)
+    kr_vals = k_rad[idx, idy]
+    bin_indices = np.digitize(kr_vals, bins) - 1
+    valid = (bin_indices >= 0) & (bin_indices < n_bins)
+    bin_indices = bin_indices[valid]
+    idx = idx[valid]
+    idy = idy[valid]
+    kx_vals = KX[idx, idy]
+    ky_vals = KY[idx, idy]
+
+    per_frame_m20 = np.zeros((n_frames, n_bins))
+    per_frame_m11 = np.zeros((n_frames, n_bins))
+    per_frame_m02 = np.zeros((n_frames, n_bins))
+
+    for t in range(n_frames):
+        F = np.fft.fft2(frames[t])
+        psd2d = np.abs(F) ** 2
+        p_vals = psd2d[idx, idy]
+        for b in range(n_bins):
+            mask_b = (bin_indices == b)
+            if not np.any(mask_b):
+                per_frame_m20[t, b] = np.nan
+                per_frame_m11[t, b] = np.nan
+                per_frame_m02[t, b] = np.nan
+                continue
+            p = p_vals[mask_b]
+            total = np.sum(p)
+            if total == 0:
+                per_frame_m20[t, b] = np.nan
+                per_frame_m11[t, b] = np.nan
+                per_frame_m02[t, b] = np.nan
+            else:
+                per_frame_m20[t, b] = np.sum(p * kx_vals[mask_b]**2) / total
+                per_frame_m11[t, b] = np.sum(p * kx_vals[mask_b] * ky_vals[mask_b]) / total
+                per_frame_m02[t, b] = np.sum(p * ky_vals[mask_b]**2) / total
+
+    # 辅助函数：计算每列的均值和标准差，并转为 masked array
+    def _mean_std(arr_2d):
+        mean = np.zeros(n_bins)
+        std = np.zeros(n_bins)
+        has_data = np.zeros(n_bins, dtype=bool)
+        for b in range(n_bins):
+            col = arr_2d[:, b]
+            if not np.all(np.isnan(col)):
+                mean[b] = np.nanmean(col)
+                std[b] = np.nanstd(col)
+                has_data[b] = True
+        return (np.ma.array(mean, mask=~has_data),
+                np.ma.array(std, mask=~has_data))
+
+    mean_m20, std_m20 = _mean_std(per_frame_m20)
+    mean_m11, std_m11 = _mean_std(per_frame_m11)
+    mean_m02, std_m02 = _mean_std(per_frame_m02)
+
+    return (k_centers,
+            mean_m20, std_m20,
+            mean_m11, std_m11,
+            mean_m02, std_m02)
+
+
+# ----------------------------------------------------------------------
+# compute_anisotropy_and_orientation (unchanged)
+# ----------------------------------------------------------------------
 def compute_anisotropy_and_orientation(k_mom, m20, m11, m02):
     """
     由谱矩张量计算各向异性度 A 和主导方向 theta (度)。
@@ -210,39 +320,55 @@ def compute_anisotropy_and_orientation(k_mom, m20, m11, m02):
     return A, theta_deg
 
 
-def plot_spectra(k_iso, power_iso, k_mom, m20, m11, m02, A, theta_deg, save_fig=None):
+# =====================================================================
+# UPDATED plot_spectra with error bars
+# =====================================================================
+def plot_spectra(k_iso, power_iso, std_power_iso,
+                 k_mom, m20, std_m20, m11, std_m11, m02, std_m02,
+                 A, theta_deg, save_fig=None):
     """
     4‑面板图：径向功率谱、矩张量、各向异性度、主导方向。
+    在径向功率谱和矩张量分量上添加误差棒 (1σ)。
     """
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     ((ax_iso, ax_mom), (ax_aniso, ax_orient)) = axes
 
-    # 径向功率谱归一化（使用第一个非掩蔽的 bin）
+    # ---- 径向功率谱归一化 ----
     ref = power_iso[0]
     if np.ma.is_masked(ref):
-        # 找到第一个有效的值
         valid = ~power_iso.mask
         ix = np.argmax(valid)
         ref = power_iso[ix]
     norm_power = power_iso / ref
+    # 误差棒也按相同因子缩放（掩蔽的仓位误差设为0）
+    yerr = np.where(std_power_iso.mask, 0.0, std_power_iso / ref)
 
-    ax_iso.loglog(k_iso, norm_power, 'k-')
-    ax_iso.set_title('Time‑averaged radial power (masked)')
+    ax_iso.errorbar(k_iso, norm_power, yerr=yerr, fmt='k-',
+                    ecolor='gray', capsize=2)
+    ax_iso.set_title('Time‑averaged radial power (+ std)')
     ax_iso.set_xlabel('Wavenumber (cyc/km)')
     ax_iso.set_ylabel('Normalized Power')
     ax_iso.grid(True, which='both', linestyle='--', alpha=0.5)
+    ax_iso.set_xscale('log')
+    ax_iso.set_yscale('log')
 
-    # 谱矩张量
-    ax_mom.semilogx(k_mom, m20, label='m20')
-    ax_mom.semilogx(k_mom, m11, label='m11')
-    ax_mom.semilogx(k_mom, m02, label='m02')
+    # ---- 谱矩张量 ----
+    for (m, std, label) in [(m20, std_m20, 'm20'),
+                             (m11, std_m11, 'm11'),
+                             (m02, std_m02, 'm02')]:
+        # 转换为普通数组并处理掩蔽
+        x = k_mom
+        y = m
+        err = np.where(std.mask, 0.0, std)
+        ax_mom.errorbar(x, y, yerr=err, label=label, capsize=2)
     ax_mom.set_title('Spectral moment tensor components')
     ax_mom.set_xlabel('Wavenumber (cyc/km)')
     ax_mom.set_ylabel('Moment')
     ax_mom.legend()
     ax_mom.grid(True, which='both', linestyle='--', alpha=0.5)
+    ax_mom.set_xscale('log')
 
-    # 各向异性度
+    # ---- 各向异性度（无误差棒）----
     ax_aniso.semilogx(k_mom, A, 'k-')
     ax_aniso.set_title('Anisotropy A = (λ₁−λ₂)/(λ₁+λ₂)')
     ax_aniso.set_xlabel('Wavenumber (cyc/km)')
@@ -250,7 +376,7 @@ def plot_spectra(k_iso, power_iso, k_mom, m20, m11, m02, A, theta_deg, save_fig=
     ax_aniso.set_ylim(-0.05, 1.05)
     ax_aniso.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # 主导方向
+    # ---- 主导方向（无误差棒）----
     ax_orient.semilogx(k_mom, theta_deg, 'k-')
     ax_orient.set_title('Principal orientation θ(k)')
     ax_orient.set_xlabel('Wavenumber (cyc/km)')
@@ -265,6 +391,9 @@ def plot_spectra(k_iso, power_iso, k_mom, m20, m11, m02, A, theta_deg, save_fig=
     return fig
 
 
+# =====================================================================
+# Main (modified)
+# =====================================================================
 def main():
     parser = argparse.ArgumentParser(
         description="Batch observation and spectral analysis of dynamic sea surface fields."
@@ -291,34 +420,42 @@ def main():
     np.save(obs_file, obs_frames)
     print(f"  Saved observed frames to {obs_file}")
 
-    # 3. 时间平均 2D PSD
-    print("Computing time‑averaged 2D PSD…")
-    psd2d_avg = time_averaged_psd_2d(obs_frames, mask)
-
-    # 4. 径向功率谱
+    # 3. 计算径向功率谱的均值与标准差
     dx = args.lx / nx
     dy = args.ly / ny
-    k_iso, power_iso = radial_power_spectrum_from_psd(psd2d_avg, dx, dy, mask)
-    print("  Radial power spectrum done.")
+    print("Computing radial power spectra (frame‑wise)…")
+    k_iso, mean_power, std_power = radial_power_spectra_sequence(
+        obs_frames, dx, dy, mask)
+    print("  Done.")
 
-    # 5. 谱矩张量
-    k_mom, m20, m11, m02 = moment_tensor_from_psd(psd2d_avg, dx, dy, mask, n_bins=100)
-    print("  Moment tensor computed.")
+    # 4. 计算谱矩张量的均值与标准差
+    print("Computing spectral moment tensors (frame‑wise)…")
+    (k_mom,
+     mean_m20, std_m20,
+     mean_m11, std_m11,
+     mean_m02, std_m02) = moment_tensor_sequence(
+        obs_frames, dx, dy, mask)
+    print("  Done.")
 
-    # 6. 各向异性 & 方向
-    A, theta_deg = compute_anisotropy_and_orientation(k_mom, m20, m11, m02)
+    # 5. 各向异性与方向 (基于均值的矩张量)
+    A, theta_deg = compute_anisotropy_and_orientation(
+        k_mom, mean_m20, mean_m11, mean_m02)
 
-    # 7. 保存数据
+    # 6. 保存数据
     data_file = f"{args.output}_spectra.npz"
     np.savez(data_file,
-             k_iso=k_iso, power_iso=power_iso,
-             k_mom=k_mom, m20=m20, m11=m11, m02=m02,
+             k_iso=k_iso, power_iso=mean_power, power_iso_std=std_power,
+             k_mom=k_mom, m20=mean_m20, m20_std=std_m20,
+             m11=mean_m11, m11_std=std_m11,
+             m02=mean_m02, m02_std=std_m02,
              A=A, theta_deg=theta_deg)
     print(f"  Saved spectral data to {data_file}")
 
-    # 8. 绘图
+    # 7. 绘图
     fig_file = f"{args.output}_spectra.png"
-    plot_spectra(k_iso, power_iso, k_mom, m20, m11, m02, A, theta_deg, save_fig=fig_file)
+    plot_spectra(k_iso, mean_power, std_power,
+                 k_mom, mean_m20, std_m20, mean_m11, std_m11, mean_m02, std_m02,
+                 A, theta_deg, save_fig=fig_file)
     print("Processing complete.")
 
 
