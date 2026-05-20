@@ -551,7 +551,7 @@ def plot_spectra(k_iso, power_iso, std_power_iso,
 
 
 # =====================================================================
-# Main (modified to include --reference)
+# Main (modified to compute reference from input frames)
 # =====================================================================
 def main():
     parser = argparse.ArgumentParser(
@@ -564,10 +564,6 @@ def main():
     parser.add_argument('--lx', type=float, default=1.0, help='Scene width in km (default: 1.0).')
     parser.add_argument('--ly', type=float, default=1.0, help='Scene height in km (default: 1.0).')
     parser.add_argument('--output', required=True, help='Base name for output files.')
-    parser.add_argument('--reference', required=False, default=None,
-                        help='Path to reference (true) .npy time series '
-                             '(same shape as input). If provided, its spectral '
-                             'curves are overplotted in red dashed style.')
     args = parser.parse_args()
 
     # 1. 加载原始时序
@@ -575,6 +571,42 @@ def main():
     frames = load_time_series(args.load)
     n_frames, ny, nx = frames.shape
     print(f"  Shape: {n_frames} frames, {ny}×{nx} pixels")
+
+    dx = args.lx / nx
+    dy = args.ly / ny
+
+    # ---- 预先计算原始场（无滤波）的统计量作为参考 ----
+    print("Computing reference spectra from original time series…")
+    full_mask = np.ones((ny, nx), dtype=bool)
+    ref_k_iso, ref_mean_power, ref_std_power = radial_power_spectra_sequence(
+        frames, dx, dy, full_mask)
+    (ref_k_mom,
+     ref_mean_m20, ref_std_m20,
+     ref_mean_m11, ref_std_m11,
+     ref_mean_m02, ref_std_m02) = moment_tensor_sequence(
+        frames, dx, dy, full_mask)
+    (ref_k_aniso,
+     ref_mean_A, ref_std_A,
+     ref_mean_theta_deg, ref_std_theta_deg) = anisotropy_orientation_sequence(
+        frames, dx, dy, full_mask)
+
+    ref_data = {
+        'k_iso': ref_k_iso,
+        'power_iso': ref_mean_power,
+        'std_power': ref_std_power,
+        'k_mom': ref_k_mom,
+        'm20': ref_mean_m20,
+        'std_m20': ref_std_m20,
+        'm11': ref_mean_m11,
+        'std_m11': ref_std_m11,
+        'm02': ref_mean_m02,
+        'std_m02': ref_std_m02,
+        'A': ref_mean_A,
+        'std_A': ref_std_A,
+        'theta_deg': ref_mean_theta_deg,
+        'std_theta_deg': ref_std_theta_deg,
+    }
+    print("  Reference statistics ready.")
 
     # 2. 模拟观测
     print(f"Generating observed sequence for aperture '{args.aperture}'…")
@@ -584,8 +616,6 @@ def main():
     print(f"  Saved observed frames to {obs_file}")
 
     # 3. 计算径向功率谱的均值与标准差
-    dx = args.lx / nx
-    dy = args.ly / ny
     print("Computing radial power spectra (frame‑wise)…")
     k_iso, mean_power, std_power = radial_power_spectra_sequence(
         obs_frames, dx, dy, mask)
@@ -608,51 +638,6 @@ def main():
         obs_frames, dx, dy, mask)
     print("  Done.")
 
-    # ---- 5b. 如果提供了参考时间序列，计算相同的统计量 ----
-    ref_data = None
-    if args.reference is not None:
-        print(f"Loading reference time series from {args.reference}…")
-        ref_frames = load_time_series(args.reference)
-        assert ref_frames.shape == obs_frames.shape, \
-            f"Reference shape {ref_frames.shape} must match observed shape {obs_frames.shape}"
-        # 参考场使用全掩膜
-        full_mask = np.ones((ny, nx), dtype=bool)
-
-        print("  Computing reference radial power spectra…")
-        ref_k_iso, ref_mean_power, ref_std_power = radial_power_spectra_sequence(
-            ref_frames, dx, dy, full_mask)
-
-        print("  Computing reference moment tensors…")
-        (ref_k_mom,
-         ref_mean_m20, ref_std_m20,
-         ref_mean_m11, ref_std_m11,
-         ref_mean_m02, ref_std_m02) = moment_tensor_sequence(
-            ref_frames, dx, dy, full_mask)
-
-        print("  Computing reference anisotropy & orientation…")
-        (ref_k_aniso,
-         ref_mean_A, ref_std_A,
-         ref_mean_theta_deg, ref_std_theta_deg) = anisotropy_orientation_sequence(
-            ref_frames, dx, dy, full_mask)
-
-        ref_data = {
-            'k_iso': ref_k_iso,
-            'power_iso': ref_mean_power,
-            'std_power': ref_std_power,
-            'k_mom': ref_k_mom,
-            'm20': ref_mean_m20,
-            'std_m20': ref_std_m20,
-            'm11': ref_mean_m11,
-            'std_m11': ref_std_m11,
-            'm02': ref_mean_m02,
-            'std_m02': ref_std_m02,
-            'A': ref_mean_A,
-            'std_A': ref_std_A,
-            'theta_deg': ref_mean_theta_deg,
-            'std_theta_deg': ref_std_theta_deg,
-        }
-        print("  Reference statistics ready.")
-
     # 6. 保存数据（包括 A 和 θ 的标准差）
     data_file = f"{args.output}_spectra.npz"
     np.savez(data_file,
@@ -664,7 +649,7 @@ def main():
              theta_deg=mean_theta_deg, theta_deg_std=std_theta_deg)
     print(f"  Saved spectral data to {data_file}")
 
-    # 7. 绘图（带全部误差棒，若提供参考数据则叠加参考曲线）
+    # 7. 绘图（带全部误差棒，叠加参考曲线）
     fig_file = f"{args.output}_spectra.png"
     plot_spectra(k_iso, mean_power, std_power,
                  k_mom, mean_m20, std_m20, mean_m11, std_m11, mean_m02, std_m02,
