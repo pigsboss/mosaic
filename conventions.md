@@ -20,8 +20,9 @@ a common understanding between the human designer(s) and the AI assistant(s).
 ## Date handling
 
 - When writing or editing a Markdown file that includes a date, the AI **must** ask
-  the human for the actual current date (e.g., "今天是哪一天？") before finalising the document.
-  The AI must never fabricate a date based on training data.
+  the human designer to supply the actual current date (e.g., "Today's date, please?")
+  before finalising the document. The AI must never fabricate a date based on
+  training data.
 
 ## Session startup
 
