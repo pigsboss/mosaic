@@ -130,7 +130,7 @@ def radial_power_spectrum_from_psd(psd2d, dx, dy, mask):
 
 
 # =====================================================================
-# NEW: per‑frame radial power spectrum sequence (mean + std)
+# per‑frame radial power spectrum sequence (mean + std)
 # =====================================================================
 def radial_power_spectra_sequence(frames, dx, dy, mask, n_bins=100):
     """
@@ -196,7 +196,7 @@ def radial_power_spectra_sequence(frames, dx, dy, mask, n_bins=100):
 
 
 # =====================================================================
-# NEW: per‑frame moment tensor sequence (mean + std)
+# per‑frame moment tensor sequence (mean + std)
 # =====================================================================
 def moment_tensor_sequence(frames, dx, dy, mask, n_bins=100):
     """
@@ -279,6 +279,112 @@ def moment_tensor_sequence(frames, dx, dy, mask, n_bins=100):
             mean_m02, std_m02)
 
 
+# =====================================================================
+# NEW: per‑frame anisotropy & orientation sequence (mean + std)
+# =====================================================================
+def anisotropy_orientation_sequence(frames, dx, dy, mask, n_bins=100):
+    """
+    逐帧计算各向异性度 A 和主导方向 θ，并用线性统计得到 A 的均值与标准差，
+    用（简单的）线性统计得到 θ 的均值与标准差（转换为度）。
+
+    Parameters
+    ----------
+    frames : ndarray (n_frames, ny, nx)
+    dx, dy : float  网格间距（与 wavenumber 单位一致）
+    mask   : 2D bool 掩膜
+    n_bins : int    径向 bin 数目
+
+    Returns
+    -------
+    k_centers        : 1D array
+    mean_A, std_A    : masked array (n_bins,)
+    mean_theta_deg   : masked array (n_bins,)
+    std_theta_deg    : masked array (n_bins,)
+    """
+    n_frames, ny, nx = frames.shape
+    kx = np.fft.fftfreq(nx, d=dx)
+    ky = np.fft.fftfreq(ny, d=dy)
+    KX, KY = np.meshgrid(kx, ky)
+    k_rad = np.sqrt(KX**2 + KY**2)
+    k_max = np.max(k_rad)
+    bins = np.linspace(0, k_max, n_bins + 1)
+    k_centers = 0.5 * (bins[1:] + bins[:-1])
+
+    valid_mask = mask & (k_rad > 0)
+    idx, idy = np.where(valid_mask)
+    kr_vals = k_rad[idx, idy]
+    bin_indices = np.digitize(kr_vals, bins) - 1
+    valid = (bin_indices >= 0) & (bin_indices < n_bins)
+    bin_indices = bin_indices[valid]
+    idx = idx[valid]
+    idy = idy[valid]
+    kx_vals = KX[idx, idy]
+    ky_vals = KY[idx, idy]
+
+    per_frame_A = np.full((n_frames, n_bins), np.nan)
+    per_frame_theta = np.full((n_frames, n_bins), np.nan)   # radians
+
+    for t in range(n_frames):
+        F = np.fft.fft2(frames[t])
+        psd2d = np.abs(F) ** 2
+        p_vals = psd2d[idx, idy]
+        for b in range(n_bins):
+            mask_b = (bin_indices == b)
+            if not np.any(mask_b):
+                continue
+            p = p_vals[mask_b]
+            total = np.sum(p)
+            if total == 0:
+                continue
+            m20 = np.sum(p * kx_vals[mask_b]**2) / total
+            m11 = np.sum(p * kx_vals[mask_b] * ky_vals[mask_b]) / total
+            m02 = np.sum(p * ky_vals[mask_b]**2) / total
+
+            trace = m20 + m02
+            det = m20 * m02 - m11 * m11
+            disc = np.sqrt(trace**2 - 4 * det)
+            lambda1 = 0.5 * (trace + disc)
+            lambda2 = 0.5 * (trace - disc)
+
+            if lambda1 + lambda2 > 0:
+                A_val = (lambda1 - lambda2) / (lambda1 + lambda2)
+            else:
+                A_val = 0.0
+
+            if (m20 - m02) == 0 and m11 == 0:
+                theta_val = 0.0
+            else:
+                theta_val = 0.5 * np.arctan2(2 * m11, m20 - m02)
+
+            per_frame_A[t, b] = A_val
+            per_frame_theta[t, b] = theta_val
+
+    # 统计 A
+    mean_A = np.zeros(n_bins)
+    std_A = np.zeros(n_bins)
+    mean_theta = np.zeros(n_bins)
+    std_theta = np.zeros(n_bins)
+    has_data = np.zeros(n_bins, dtype=bool)
+
+    for b in range(n_bins):
+        A_vals = per_frame_A[:, b]
+        theta_vals = per_frame_theta[:, b]
+        if not np.all(np.isnan(A_vals)):
+            has_data[b] = True
+            mean_A[b] = np.nanmean(A_vals)
+            std_A[b] = np.nanstd(A_vals)
+            # 对角度采用线性统计（可改进为 circular mean，此处暂时简化）
+            mean_theta[b] = np.nanmean(theta_vals)
+            std_theta[b] = np.nanstd(theta_vals)
+
+    mean_A_masked = np.ma.array(mean_A, mask=~has_data)
+    std_A_masked = np.ma.array(std_A, mask=~has_data)
+    mean_theta_masked = np.ma.array(np.degrees(mean_theta), mask=~has_data)
+    std_theta_masked = np.ma.array(np.degrees(std_theta), mask=~has_data)
+
+    return k_centers, mean_A_masked, std_A_masked, mean_theta_masked, std_theta_masked
+
+
 # ----------------------------------------------------------------------
 # compute_anisotropy_and_orientation (unchanged)
 # ----------------------------------------------------------------------
@@ -321,14 +427,14 @@ def compute_anisotropy_and_orientation(k_mom, m20, m11, m02):
 
 
 # =====================================================================
-# UPDATED plot_spectra with error bars
+# UPDATED plot_spectra with error bars for A and theta
 # =====================================================================
 def plot_spectra(k_iso, power_iso, std_power_iso,
                  k_mom, m20, std_m20, m11, std_m11, m02, std_m02,
-                 A, theta_deg, save_fig=None):
+                 A, theta_deg, std_A=None, std_theta=None, save_fig=None):
     """
     4‑面板图：径向功率谱、矩张量、各向异性度、主导方向。
-    在径向功率谱和矩张量分量上添加误差棒 (1σ)。
+    在径向功率谱、矩张量分量、各向异性度及主导方向上添加误差棒 (1σ)。
     """
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     ((ax_iso, ax_mom), (ax_aniso, ax_orient)) = axes
@@ -368,16 +474,27 @@ def plot_spectra(k_iso, power_iso, std_power_iso,
     ax_mom.grid(True, which='both', linestyle='--', alpha=0.5)
     ax_mom.set_xscale('log')
 
-    # ---- 各向异性度（无误差棒）----
-    ax_aniso.semilogx(k_mom, A, 'k-')
+    # ---- 各向异性度（带误差棒）----
+    if std_A is not None:
+        # 转换 masked arrays 为普通数组
+        yerr_A = np.where(std_A.mask, 0.0, std_A)
+        ax_aniso.errorbar(k_mom, A, yerr=yerr_A, fmt='ko', ecolor='gray',
+                          capsize=2)
+    else:
+        ax_aniso.semilogx(k_mom, A, 'k-')
     ax_aniso.set_title('Anisotropy A = (λ₁−λ₂)/(λ₁+λ₂)')
     ax_aniso.set_xlabel('Wavenumber (cyc/km)')
     ax_aniso.set_ylabel('A')
     ax_aniso.set_ylim(-0.05, 1.05)
     ax_aniso.grid(True, which='both', linestyle='--', alpha=0.5)
 
-    # ---- 主导方向（无误差棒）----
-    ax_orient.semilogx(k_mom, theta_deg, 'k-')
+    # ---- 主导方向（带误差棒）----
+    if std_theta is not None:
+        yerr_theta = np.where(std_theta.mask, 0.0, std_theta)
+        ax_orient.errorbar(k_mom, theta_deg, yerr=yerr_theta, fmt='ko',
+                           ecolor='gray', capsize=2)
+    else:
+        ax_orient.semilogx(k_mom, theta_deg, 'k-')
     ax_orient.set_title('Principal orientation θ(k)')
     ax_orient.set_xlabel('Wavenumber (cyc/km)')
     ax_orient.set_ylabel('θ (degrees)')
@@ -437,25 +554,31 @@ def main():
         obs_frames, dx, dy, mask)
     print("  Done.")
 
-    # 5. 各向异性与方向 (基于均值的矩张量)
-    A, theta_deg = compute_anisotropy_and_orientation(
-        k_mom, mean_m20, mean_m11, mean_m02)
+    # 5. 计算各向异性度 A 和主导方向 θ 的均值与标准差
+    print("Computing anisotropy & orientation (frame‑wise)…")
+    (k_aniso,
+     mean_A, std_A,
+     mean_theta_deg, std_theta_deg) = anisotropy_orientation_sequence(
+        obs_frames, dx, dy, mask)
+    print("  Done.")
 
-    # 6. 保存数据
+    # 6. 保存数据（包括 A 和 θ 的标准差）
     data_file = f"{args.output}_spectra.npz"
     np.savez(data_file,
              k_iso=k_iso, power_iso=mean_power, power_iso_std=std_power,
              k_mom=k_mom, m20=mean_m20, m20_std=std_m20,
              m11=mean_m11, m11_std=std_m11,
              m02=mean_m02, m02_std=std_m02,
-             A=A, theta_deg=theta_deg)
+             A=mean_A, A_std=std_A,
+             theta_deg=mean_theta_deg, theta_deg_std=std_theta_deg)
     print(f"  Saved spectral data to {data_file}")
 
-    # 7. 绘图
+    # 7. 绘图（带全部误差棒）
     fig_file = f"{args.output}_spectra.png"
     plot_spectra(k_iso, mean_power, std_power,
                  k_mom, mean_m20, std_m20, mean_m11, std_m11, mean_m02, std_m02,
-                 A, theta_deg, save_fig=fig_file)
+                 mean_A, mean_theta_deg,
+                 std_A=std_A, std_theta=std_theta_deg, save_fig=fig_file)
     print("Processing complete.")
 
 
