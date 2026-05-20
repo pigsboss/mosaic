@@ -132,11 +132,7 @@ def radial_power_spectrum_from_psd(psd2d, dx, dy, mask):
 def moment_tensor_from_psd(psd2d, dx, dy, mask, n_bins=100):
     """
     从时间平均的 2D PSD 计算谱矩张量分量 m20, m11, m02（仅 mask 内有效）。
-    psd2d : (ny, nx)
-    dx, dy : 网格间距
-    mask : (ny, nx) bool
-    n_bins : int
-    返回 : k_centers, m20, m11, m02 (每个变量都是 1D，无数据的仓位值为 0)
+    返回的 m20, m11, m02 均为 masked array，无数据的仓位被掩蔽。
     """
     ny, nx = psd2d.shape
     kx = np.fft.fftfreq(nx, d=dx)
@@ -151,6 +147,7 @@ def moment_tensor_from_psd(psd2d, dx, dy, mask, n_bins=100):
     m20 = np.zeros(n_bins)
     m11 = np.zeros(n_bins)
     m02 = np.zeros(n_bins)
+    has_data = np.zeros(n_bins, dtype=bool)
 
     for i in range(n_bins):
         mask_bin = (k_rad >= bins[i]) & (k_rad < bins[i+1])
@@ -163,21 +160,34 @@ def moment_tensor_from_psd(psd2d, dx, dy, mask, n_bins=100):
         total = np.sum(p_vals)
         if total == 0:
             continue
+        has_data[i] = True
         m20[i] = np.sum(p_vals * kx_vals**2) / total
         m11[i] = np.sum(p_vals * kx_vals * ky_vals) / total
         m02[i] = np.sum(p_vals * ky_vals**2) / total
 
-    return k_centers, m20, m11, m02
+    # 将没有数据的仓位屏蔽
+    m20_masked = np.ma.array(m20, mask=~has_data)
+    m11_masked = np.ma.array(m11, mask=~has_data)
+    m02_masked = np.ma.array(m02, mask=~has_data)
+    return k_centers, m20_masked, m11_masked, m02_masked
 
 
 def compute_anisotropy_and_orientation(k_mom, m20, m11, m02):
     """
     由谱矩张量计算各向异性度 A 和主导方向 theta (度)。
+    输入 m20, m11, m02 应为 masked arrays。
+    返回的 A 和 theta_deg 也是 masked arrays，无数据的仓位被掩蔽。
     """
     n = len(k_mom)
-    A = np.zeros(n)
-    theta_deg = np.zeros(n)
+    A = np.ma.zeros(n)          # 创建 masked array，初始 mask=False
+    theta_deg = np.ma.zeros(n)
+    # 标记所有仓位为无效，后续赋值时取消掩蔽
+    A.mask = True
+    theta_deg.mask = True
+
     for i in range(n):
+        if m20.mask[i] or m11.mask[i] or m02.mask[i]:
+            continue   # 保持掩蔽
         trace = m20[i] + m02[i]
         det = m20[i] * m02[i] - m11[i] * m11[i]
         disc = np.sqrt(trace**2 - 4*det)
@@ -187,11 +197,16 @@ def compute_anisotropy_and_orientation(k_mom, m20, m11, m02):
             A[i] = (lambda1 - lambda2) / (lambda1 + lambda2)
         else:
             A[i] = 0.0
+        # 计算方向
         if (m20[i] - m02[i]) == 0 and m11[i] == 0:
             theta_rad = 0.0
         else:
             theta_rad = 0.5 * np.arctan2(2*m11[i], m20[i] - m02[i])
         theta_deg[i] = np.degrees(theta_rad)
+        # 成功赋值后取消该位置的掩蔽
+        A.mask[i] = False
+        theta_deg.mask[i] = False
+
     return A, theta_deg
 
 
@@ -202,8 +217,16 @@ def plot_spectra(k_iso, power_iso, k_mom, m20, m11, m02, A, theta_deg, save_fig=
     fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     ((ax_iso, ax_mom), (ax_aniso, ax_orient)) = axes
 
-    # 径向功率谱
-    ax_iso.loglog(k_iso, power_iso / power_iso[0], 'k-')
+    # 径向功率谱归一化（使用第一个非掩蔽的 bin）
+    ref = power_iso[0]
+    if np.ma.is_masked(ref):
+        # 找到第一个有效的值
+        valid = ~power_iso.mask
+        ix = np.argmax(valid)
+        ref = power_iso[ix]
+    norm_power = power_iso / ref
+
+    ax_iso.loglog(k_iso, norm_power, 'k-')
     ax_iso.set_title('Time‑averaged radial power (masked)')
     ax_iso.set_xlabel('Wavenumber (cyc/km)')
     ax_iso.set_ylabel('Normalized Power')
