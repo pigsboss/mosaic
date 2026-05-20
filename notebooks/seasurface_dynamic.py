@@ -748,23 +748,59 @@ if __name__ == "__main__":
         k_iso, power_iso = time_averaged_radial_psd(data, dx, dy)
         k_mom, m20, m11, m02 = compute_time_averaged_moment_tensor(data, dx, dy)
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-        # Isotropic power
-        axes[0].loglog(k_iso, power_iso / power_iso[0], 'k-')
-        axes[0].set_title('Time‑averaged isotropic radial power')
-        axes[0].set_xlabel('Wavenumber (cyc/km)')
-        axes[0].set_ylabel('Normalized Power')
-        axes[0].grid(True, which='both', linestyle='--', alpha=0.5)
+        # derive anisotropy A and principal orientation theta
+        A = np.zeros_like(k_mom)
+        theta_rad = np.zeros_like(k_mom)
+        for i in range(len(k_mom)):
+            trace = m20[i] + m02[i]
+            det = m20[i] * m02[i] - m11[i] * m11[i]
+            disc = np.sqrt(trace**2 - 4*det)
+            lambda1 = 0.5 * (trace + disc)
+            lambda2 = 0.5 * (trace - disc)
+            if lambda1 + lambda2 > 0:
+                A[i] = (lambda1 - lambda2) / (lambda1 + lambda2)
+            else:
+                A[i] = 0.0
+            if (m20[i] - m02[i]) == 0 and m11[i] == 0:
+                theta_rad[i] = 0.0
+            else:
+                theta_rad[i] = 0.5 * np.arctan2(2*m11[i], m20[i] - m02[i])
+        theta_deg = np.degrees(theta_rad)
 
-        # Moment tensor components
-        axes[1].semilogx(k_mom, m20, label='m20')
-        axes[1].semilogx(k_mom, m11, label='m11')
-        axes[1].semilogx(k_mom, m02, label='m02')
-        axes[1].set_title('Spectral moment tensor components')
-        axes[1].set_xlabel('Wavenumber (cyc/km)')
-        axes[1].set_ylabel('Moment')
-        axes[1].legend()
-        axes[1].grid(True, which='both', linestyle='--', alpha=0.5)
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        ((ax_iso, ax_mom), (ax_aniso, ax_orient)) = axes
+
+        # 1. Time‑averaged isotropic radial power
+        ax_iso.loglog(k_iso, power_iso / power_iso[0], 'k-')
+        ax_iso.set_title('Time‑averaged isotropic radial power')
+        ax_iso.set_xlabel('Wavenumber (cyc/km)')
+        ax_iso.set_ylabel('Normalized Power')
+        ax_iso.grid(True, which='both', linestyle='--', alpha=0.5)
+
+        # 2. Spectral moment tensor components
+        ax_mom.semilogx(k_mom, m20, label='m20')
+        ax_mom.semilogx(k_mom, m11, label='m11')
+        ax_mom.semilogx(k_mom, m02, label='m02')
+        ax_mom.set_title('Spectral moment tensor components')
+        ax_mom.set_xlabel('Wavenumber (cyc/km)')
+        ax_mom.set_ylabel('Moment')
+        ax_mom.legend()
+        ax_mom.grid(True, which='both', linestyle='--', alpha=0.5)
+
+        # 3. Anisotropy degree A(k)
+        ax_aniso.semilogx(k_mom, A, 'k-')
+        ax_aniso.set_title('Anisotropy A = (λ₁−λ₂)/(λ₁+λ₂)')
+        ax_aniso.set_xlabel('Wavenumber (cyc/km)')
+        ax_aniso.set_ylabel('A')
+        ax_aniso.set_ylim(-0.05, 1.05)
+        ax_aniso.grid(True, which='both', linestyle='--', alpha=0.5)
+
+        # 4. Principal orientation θ(k)
+        ax_orient.semilogx(k_mom, theta_deg, 'k-')
+        ax_orient.set_title('Principal orientation θ(k)')
+        ax_orient.set_xlabel('Wavenumber (cyc/km)')
+        ax_orient.set_ylabel('θ (degrees)')
+        ax_orient.grid(True, which='both', linestyle='--', alpha=0.5)
 
         fig.tight_layout()
         if args.save_fig:
@@ -775,7 +811,8 @@ if __name__ == "__main__":
         if args.save_data:
             np.savez(f"{args.save_data}.npz",
                      k_iso=k_iso, power_iso=power_iso,
-                     k_mom=k_mom, m20=m20, m11=m11, m02=m02)
+                     k_mom=k_mom, m20=m20, m11=m11, m02=m02,
+                     A=A, theta_deg=theta_deg)
             print(f"Saved data: {args.save_data}.npz")
 
     elif args.command == 'help':
