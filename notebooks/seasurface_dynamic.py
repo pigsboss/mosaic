@@ -36,6 +36,9 @@ import seasurface
 reload(seasurface)
 from seasurface import state_params
 
+# Increase embed limit to avoid warnings with large animations
+plt.rcParams['animation.embed_limit'] = 100  # MB
+
 # ----------------------------------------------------------------------
 # Append velocity parameters to state_params for advection
 # ----------------------------------------------------------------------
@@ -451,7 +454,8 @@ def generate_state_sequence(state, duration, dt,
 # ----------------------------------------------------------------------
 # Jupyter animation utilities
 # ----------------------------------------------------------------------
-def animate_fields(t, sst_ts, ssh_ts, lx=1.0, ly=1.0, interval=100, as_html5=True):
+def animate_fields(t, sst_ts, ssh_ts, lx=1.0, ly=1.0, interval=100,
+                   as_html5=True, show=True, save_html=None, save_gif=None):
     """
     Create a dual‑panel animation of SST (left) and SSH (right) evolving in time.
     Parameters
@@ -463,6 +467,10 @@ def animate_fields(t, sst_ts, ssh_ts, lx=1.0, ly=1.0, interval=100, as_html5=Tru
     interval : int                    time between frames in ms
     as_html5 : bool                   if True, return HTML5 <video> tag string;
                                       otherwise return the FuncAnimation object.
+    show : bool                       if True, display the animation in an interactive window
+    save_html : str or None           if given, save the animation as an HTML file
+    save_gif : str or None            if given, save the animation as a GIF file (requires pillow)
+
     Returns
     -------
     HTML string or FuncAnimation
@@ -494,9 +502,28 @@ def animate_fields(t, sst_ts, ssh_ts, lx=1.0, ly=1.0, interval=100, as_html5=Tru
 
     ani = FuncAnimation(fig, update, frames=len(t),
                         interval=interval, blit=True, repeat=True)
-    plt.close(fig)
+
+    # Generate HTML string if needed
+    if as_html5 or save_html is not None:
+        html_str = ani.to_html5_video()
+    else:
+        html_str = None
+
+    # Save files before potentially closing figure
+    if save_html is not None:
+        with open(save_html, 'w') as f:
+            f.write(html_str)
+    if save_gif is not None:
+        ani.save(save_gif, writer='pillow', fps=5)
+
+    # Display or close
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
     if as_html5:
-        return ani.to_html5_video()
+        return html_str
     else:
         return ani
 
@@ -631,13 +658,13 @@ if __name__ == "__main__":
             advection=True
         )
 
-        # Animation
+        # Animation – show and save HTML / GIF
         try:
-            video = animate_fields(t, sst_ts, ssh_ts, lx=lx, ly=ly, interval=80, as_html5=True)
-            fname = f"animation_{state}.html"
-            with open(fname, 'w') as f:
-                f.write(f"<html><body>{video}</body></html>")
-            print(f"  Saved {fname}")
+            animate_fields(t, sst_ts, ssh_ts, lx=lx, ly=ly, interval=80,
+                           as_html5=False, show=True,
+                           save_html=f"animation_{state}.html",
+                           save_gif=f"animation_{state}.gif")
+            print(f"  Saved animation_{state}.html and animation_{state}.gif")
         except Exception as e:
             print(f"  Animation skipped: {e}")
 
@@ -671,7 +698,8 @@ if __name__ == "__main__":
         fig.tight_layout()
         fname = f"spectra_avg_{state}.png"
         fig.savefig(fname, dpi=150)
-        print(f"  Saved {fname}")
+        plt.show()   # Display the figure interactively
         plt.close(fig)
+        print(f"  Saved {fname}")
 
     print("All state sequences processed.")
